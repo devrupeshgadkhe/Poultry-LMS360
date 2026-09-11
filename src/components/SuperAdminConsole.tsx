@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useFarm } from '../context/FarmContext';
 import { checkSupabaseConnection, supabase } from '../lib/supabase';
-import { Building2, Plus, CheckCircle2, AlertCircle, RefreshCw, Users, Shield, ArrowRight, Eye, Phone, Mail, MapPin } from 'lucide-react';
+import { Building2, Plus, CheckCircle2, AlertCircle, RefreshCw, Users, Shield, ArrowRight, Eye, Phone, Mail, MapPin, Database } from 'lucide-react';
+import LegacyMigrator from './LegacyMigrator';
 
 interface FarmStats {
   farmId: number;
@@ -19,6 +20,7 @@ export const SuperAdminConsole: React.FC = () => {
     message: ''
   });
   const [isCheckingConn, setIsCheckingConn] = useState(false);
+  const [adminView, setAdminView] = useState<'farms' | 'migrator'>('farms');
 
   // New Farm Form State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -169,6 +171,36 @@ export const SuperAdminConsole: React.FC = () => {
         </div>
       </div>
 
+      {/* Sub-Navigation Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button
+          onClick={() => setAdminView('farms')}
+          className={`px-4 py-2 text-xs font-bold rounded-xl transition flex items-center gap-2 ${
+            adminView === 'farms'
+              ? 'bg-slate-900 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Building2 className="w-4 h-4" />
+          Tenant Farms & Cloud Health
+        </button>
+        <button
+          onClick={() => setAdminView('migrator')}
+          className={`px-4 py-2 text-xs font-bold rounded-xl transition flex items-center gap-2 ${
+            adminView === 'migrator'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Database className="w-4 h-4" />
+          Legacy SQLite Migrator
+        </button>
+      </div>
+
+      {adminView === 'migrator' ? (
+        <LegacyMigrator userRole="Developer" />
+      ) : (
+        <>
       {/* Cloud Connectivity Status Alert */}
       {connectionStatus.checked && (
         <div
@@ -385,6 +417,8 @@ export const SuperAdminConsole: React.FC = () => {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Add New Farm Modal */}
       {showAddModal && (

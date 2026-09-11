@@ -766,6 +766,27 @@ export async function initializeDatabase() {
     console.error("Failed to migrate Users columns:", err.message);
   }
 
+  // Ensure all application tables have FarmId for multi-tenant isolation
+  const tablesNeedingFarmId = [
+    'Flocks', 'Inventories', 'DailyLogs', 'Vaccinations', 'EggInventories',
+    'Customers', 'Suppliers', 'Purchases', 'PurchaseItems', 'PurchaseExtraExpenses',
+    'PurchaseReturns', 'PurchaseReturnItems', 'Sales', 'SaleItems', 'SaleReturns',
+    'SaleReturnItems', 'TransactionCategories', 'Staff', 'FinancialTransactions',
+    'FoodRecipes', 'FeedProductionLogs'
+  ];
+  for (const tbl of tablesNeedingFarmId) {
+    try {
+      const cols = await query.all(`PRAGMA table_info(${tbl})`);
+      const cNames = cols.map((c: any) => c.name);
+      if (!cNames.includes('FarmId')) {
+        await query.run(`ALTER TABLE ${tbl} ADD COLUMN FarmId INTEGER DEFAULT 1`);
+        console.log(`[DB Migration] Added FarmId column to local table ${tbl}`);
+      }
+    } catch (colErr: any) {
+      // Table might not exist or already migrated
+    }
+  }
+
   // Apply default seeding
   await seedDatabase();
 }

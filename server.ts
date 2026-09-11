@@ -23,6 +23,7 @@ import {
 import { backupControllers, startGoogleDriveAutoConnector } from './server/backups.js';
 import { settingsControllers, userManagementControllers } from './server/settingsControllers.js';
 import { bulkImportControllers } from './server/bulkImportControllers.js';
+import { migrationControllers } from './server/migrationControllers.js';
 import { getSupabaseFarms, createSupabaseFarm, syncSupabaseToLocal } from './server/supabase.js';
 
 async function startServer() {
@@ -229,6 +230,10 @@ async function startServer() {
   app.post('/api/backups/gdrive/disconnect', backupControllers.disconnectGDrive);
   app.post('/api/backups/github/configure', backupControllers.configureGitHub);
   app.get('/api/backups/status', backupControllers.getStatus);
+
+  // Developer-Only Legacy Single-Farm to Multi-Farm Migration API
+  app.post('/api/migration/analyze', migrationControllers.analyzeLegacyBackup);
+  app.post('/api/migration/execute', migrationControllers.executeMigration);
 
   // 13. Farm Settings & Operator Access Matrix Management
   app.get('/api/settings', settingsControllers.getSettings);

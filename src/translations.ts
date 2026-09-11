@@ -884,6 +884,7 @@ export function getTabTranslation(name: string, t: TranslationSet): string {
     case 'Finance Ledgers': return t.financeLedgers;
     case 'SQL CLI Console': return t.sqlCli;
     case 'Super Admin Console': return 'Super Admin Console';
+    case 'Legacy Migrator': return 'Legacy Migrator';
     case 'User Access': return 'User Access';
     case 'Backups': return t.backups;
     case 'Reports & Ledgers': return t.reportsLedgers;

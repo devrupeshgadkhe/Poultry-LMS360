@@ -39,6 +39,7 @@ import Backups from './components/Backups';
 import Reports from './components/Reports';
 import SettingsAudit from './components/SettingsAudit';
 import BulkImport from './components/BulkImport';
+import LegacyMigrator from './components/LegacyMigrator';
 import { SuperAdminConsole } from './components/SuperAdminConsole';
 import { UserAccessManager } from './components/UserAccessManager';
 import { useFarm } from './context/FarmContext';
@@ -57,6 +58,7 @@ type Tab =
   | 'Finance Ledgers'
   | 'SQL CLI Console'
   | 'Super Admin Console'
+  | 'Legacy Migrator'
   | 'User Access'
   | 'Backups'
   | 'Reports & Ledgers'
@@ -432,6 +434,7 @@ export default function App() {
     { name: 'Reports & Ledgers', icon: BarChart3 },
     { name: 'Bulk Data Import', icon: FileSpreadsheet },
     { name: 'Super Admin Console', icon: Shield, roles: ['Developer'] },
+    { name: 'Legacy Migrator', icon: Database, roles: ['Developer'] },
     { name: 'User Access', icon: Key, roles: ['Developer'] },
     { name: 'SQL CLI Console', icon: Database, roles: ['Developer'] },
     { name: 'Backups', icon: Cloud },
@@ -478,6 +481,11 @@ export default function App() {
           return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
         }
         return <SuperAdminConsole />;
+      case 'Legacy Migrator':
+        if (userRole !== 'Developer') {
+          return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
+        }
+        return <LegacyMigrator userRole={userRole} />;
       case 'User Access':
         if (userRole !== 'Developer') {
           return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
