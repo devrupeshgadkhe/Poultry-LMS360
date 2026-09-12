@@ -351,7 +351,26 @@ export default function App() {
         body: JSON.stringify({ username: authUsername.trim(), password: authPassword }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const rawText = await res.text();
+        if (!res.ok) {
+          throw new Error(
+            res.status === 404
+              ? 'बॅकएंड API सर्व्हर उपलब्ध नाही (HTTP 404). कृपया Vercel सर्व्हरलेस फंक्शन डिप्लॉय तपासा.'
+              : `सर्व्हरकडून त्रुटी मिळाली (HTTP ${res.status}): ${rawText.substring(0, 100)}`
+          );
+        }
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          throw new Error('सर्व्हरकडून अमान्य प्रतिसाद आला.');
+        }
+      }
+
       if (!res.ok) {
         setLoginError(data.error || 'Incorrect username or password. Please try again.');
       } else {

@@ -17,6 +17,21 @@ export const dbPath = (() => {
     }
   }
 
+  // If running in Vercel Serverless environment, only /tmp is writable
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    const tmpDb = path.resolve('/tmp', 'poultry360.db');
+    const bundledDb = path.resolve(process.cwd(), 'poultry360.db');
+    if (!fs.existsSync(tmpDb) && fs.existsSync(bundledDb)) {
+      try {
+        fs.copyFileSync(bundledDb, tmpDb);
+        console.log('[Vercel DB] Bundled database initialized in /tmp/poultry360.db');
+      } catch (err: any) {
+        console.warn('[Vercel DB] Could not copy bundled DB to /tmp:', err.message);
+      }
+    }
+    return tmpDb;
+  }
+
   // Outside Electron, if running in a cloud/development container or production build,
   // store the database in the workspace directory (current working directory) so that
   // SQLite data (including settings, links, and transaction logs) persists across builds & container restarts.
@@ -31,6 +46,7 @@ export const dbPath = (() => {
 
 // Migrate database file from ephemeral home directory if it exists and hasn't been copied yet
 (() => {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) return;
   const sourceHome = os.homedir() || '/root';
   const sourceDbPath = path.resolve(sourceHome, 'poultry360.db');
   const targetDbPath = dbPath;
