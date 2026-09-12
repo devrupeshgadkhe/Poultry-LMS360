@@ -340,6 +340,112 @@ export default function App() {
     };
   }, [activeTab]);
 
+  // Check if current user has a specific granular claim
+  const hasPermission = (claim?: string): boolean => {
+    if (!userRole) return false;
+    if (userRole === 'Developer') return true;
+    if (userRole === 'Admin') return true;
+    
+    const perms = (userPermissions || '').trim().toLowerCase();
+    if (perms === 'all' || perms.includes('admin')) return true;
+    if (!claim) return true;
+    
+    const list = perms.split(',').map(p => p.trim());
+    return list.includes(claim.toLowerCase());
+  };
+
+  // Check if current user can access a specific navigation tab
+  const canAccessTab = (tabName: Tab): boolean => {
+    if (!userRole) return false;
+    if (userRole === 'Developer') return true;
+    
+    // Developer-exclusive tools
+    if (tabName === 'Super Admin Console' || tabName === 'Legacy Migrator' || tabName === 'SQL CLI Console') {
+      return false;
+    }
+    
+    // Farm Admin or Developer tools
+    if (tabName === 'User Access') {
+      return userRole === 'Admin' || hasPermission('admin');
+    }
+    if (tabName === 'Farm Settings & Access') {
+      return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
+    }
+    if (tabName === 'Backups') {
+      return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
+    }
+    if (tabName === 'Bulk Data Import') {
+      return userRole === 'Admin' || hasPermission('bulkimport.view') || hasPermission('admin');
+    }
+
+    if (userRole === 'Admin') return true;
+
+    // Granular operational modules for Staff / Operator
+    switch (tabName) {
+      case 'Dashboard':
+        return hasPermission('dashboard.view');
+      case 'Layer Flocks':
+        return hasPermission('flocks.view');
+      case 'Daily Logs':
+        return hasPermission('dailylogs.view');
+      case 'Vaccinations':
+        return hasPermission('health.view');
+      case 'Warehouse Stock':
+        return hasPermission('inventory.view');
+      case 'Milling & Mix':
+        return hasPermission('inventory.view');
+      case 'Stakeholders':
+        return hasPermission('customers.view') || hasPermission('suppliers.view');
+      case 'Procurement':
+        return hasPermission('purchases.view');
+      case 'Sales Desk':
+        return hasPermission('sales.view');
+      case 'Finance Ledgers':
+        return hasPermission('financials.view');
+      case 'Reports & Ledgers':
+        return hasPermission('reports.view');
+      default:
+        return false;
+    }
+  };
+
+  // Define navigations mapping
+  const menuItems: { name: Tab; icon: any; roles?: string[]; permission?: string }[] = [
+    { name: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
+    { name: 'Layer Flocks', icon: Activity, permission: 'flocks.view' },
+    { name: 'Daily Logs', icon: FileSpreadsheet, permission: 'dailylogs.view' },
+    { name: 'Vaccinations', icon: CalendarCheck, permission: 'health.view' },
+    { name: 'Milling & Mix', icon: Workflow, permission: 'inventory.view' },
+    { name: 'Procurement', icon: Settings, permission: 'purchases.view' },
+    { name: 'Sales Desk', icon: Settings, permission: 'sales.view' },
+    { name: 'Warehouse Stock', icon: Settings, permission: 'inventory.view' },
+    { name: 'Stakeholders', icon: Contact2, permission: 'customers.view' },
+    { name: 'Finance Ledgers', icon: Settings, permission: 'financials.view' },
+    { name: 'Reports & Ledgers', icon: BarChart3, permission: 'reports.view' },
+    { name: 'Bulk Data Import', icon: FileSpreadsheet, roles: ['Developer', 'Admin'], permission: 'bulkimport.view' },
+    { name: 'Super Admin Console', icon: Shield, roles: ['Developer'] },
+    { name: 'Legacy Migrator', icon: Database, roles: ['Developer'] },
+    { name: 'User Access', icon: Key, roles: ['Developer', 'Admin'] },
+    { name: 'SQL CLI Console', icon: Database, roles: ['Developer'] },
+    { name: 'Backups', icon: Cloud, roles: ['Developer', 'Admin'], permission: 'settings.view' },
+    { name: 'Farm Settings & Access', icon: Settings, roles: ['Developer', 'Admin'], permission: 'settings.view' },
+  ];
+
+  // Auto-switch to the first permitted tab if the current activeTab is not permitted
+  useEffect(() => {
+    if (token && userRole) {
+      if (!canAccessTab(activeTab)) {
+        const firstPermitted = menuItems.find((item) => {
+          if (item.roles && !item.roles.includes(userRole || '')) return false;
+          return canAccessTab(item.name);
+        });
+        if (firstPermitted) {
+          setActiveTab(firstPermitted.name);
+        }
+      }
+    }
+  }, [token, userRole, userPermissions, activeTab]);
+
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
@@ -645,112 +751,6 @@ export default function App() {
       </div>
     );
   }
-
-  // Check if current user has a specific granular claim
-  const hasPermission = (claim?: string): boolean => {
-    if (!userRole) return false;
-    if (userRole === 'Developer') return true;
-    if (userRole === 'Admin') return true;
-    
-    const perms = (userPermissions || '').trim().toLowerCase();
-    if (perms === 'all' || perms.includes('admin')) return true;
-    if (!claim) return true;
-    
-    const list = perms.split(',').map(p => p.trim());
-    return list.includes(claim.toLowerCase());
-  };
-
-  // Check if current user can access a specific navigation tab
-  const canAccessTab = (tabName: Tab): boolean => {
-    if (!userRole) return false;
-    if (userRole === 'Developer') return true;
-    
-    // Developer-exclusive tools
-    if (tabName === 'Super Admin Console' || tabName === 'Legacy Migrator' || tabName === 'SQL CLI Console') {
-      return false;
-    }
-    
-    // Farm Admin or Developer tools
-    if (tabName === 'User Access') {
-      return userRole === 'Admin' || hasPermission('admin');
-    }
-    if (tabName === 'Farm Settings & Access') {
-      return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
-    }
-    if (tabName === 'Backups') {
-      return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
-    }
-    if (tabName === 'Bulk Data Import') {
-      return userRole === 'Admin' || hasPermission('bulkimport.view') || hasPermission('admin');
-    }
-
-    if (userRole === 'Admin') return true;
-
-    // Granular operational modules for Staff / Operator
-    switch (tabName) {
-      case 'Dashboard':
-        return hasPermission('dashboard.view');
-      case 'Layer Flocks':
-        return hasPermission('flocks.view');
-      case 'Daily Logs':
-        return hasPermission('dailylogs.view');
-      case 'Vaccinations':
-        return hasPermission('health.view');
-      case 'Warehouse Stock':
-        return hasPermission('inventory.view');
-      case 'Milling & Mix':
-        return hasPermission('inventory.view');
-      case 'Stakeholders':
-        return hasPermission('customers.view') || hasPermission('suppliers.view');
-      case 'Procurement':
-        return hasPermission('purchases.view');
-      case 'Sales Desk':
-        return hasPermission('sales.view');
-      case 'Finance Ledgers':
-        return hasPermission('financials.view');
-      case 'Reports & Ledgers':
-        return hasPermission('reports.view');
-      default:
-        return false;
-    }
-  };
-
-  // Define navigations mapping
-  const menuItems: { name: Tab; icon: any; roles?: string[]; permission?: string }[] = [
-    { name: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
-    { name: 'Layer Flocks', icon: Activity, permission: 'flocks.view' },
-    { name: 'Daily Logs', icon: FileSpreadsheet, permission: 'dailylogs.view' },
-    { name: 'Vaccinations', icon: CalendarCheck, permission: 'health.view' },
-    { name: 'Milling & Mix', icon: Workflow, permission: 'inventory.view' },
-    { name: 'Procurement', icon: Settings, permission: 'purchases.view' },
-    { name: 'Sales Desk', icon: Settings, permission: 'sales.view' },
-    { name: 'Warehouse Stock', icon: Settings, permission: 'inventory.view' },
-    { name: 'Stakeholders', icon: Contact2, permission: 'customers.view' },
-    { name: 'Finance Ledgers', icon: Settings, permission: 'financials.view' },
-    { name: 'Reports & Ledgers', icon: BarChart3, permission: 'reports.view' },
-    { name: 'Bulk Data Import', icon: FileSpreadsheet, roles: ['Developer', 'Admin'], permission: 'bulkimport.view' },
-    { name: 'Super Admin Console', icon: Shield, roles: ['Developer'] },
-    { name: 'Legacy Migrator', icon: Database, roles: ['Developer'] },
-    { name: 'User Access', icon: Key, roles: ['Developer', 'Admin'] },
-    { name: 'SQL CLI Console', icon: Database, roles: ['Developer'] },
-    { name: 'Backups', icon: Cloud, roles: ['Developer', 'Admin'], permission: 'settings.view' },
-    { name: 'Farm Settings & Access', icon: Settings, roles: ['Developer', 'Admin'], permission: 'settings.view' },
-  ];
-
-  // Auto-switch to the first permitted tab if the current activeTab is not permitted
-  useEffect(() => {
-    if (token && userRole) {
-      if (!canAccessTab(activeTab)) {
-        const firstPermitted = menuItems.find((item) => {
-          if (item.roles && !item.roles.includes(userRole || '')) return false;
-          return canAccessTab(item.name);
-        });
-        if (firstPermitted) {
-          setActiveTab(firstPermitted.name);
-        }
-      }
-    }
-  }, [token, userRole, userPermissions, activeTab]);
 
   const renderActiveComponent = () => {
     if (!canAccessTab(activeTab)) {
