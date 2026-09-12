@@ -984,25 +984,14 @@ async function seedDatabase() {
     // Already exists
   }
 
-  // 9. Seed default GitHub Backup credentials from user request if empty
+  // 9. Clean up revoked or invalid GitHub Backup credentials
   try {
-    const currentGit = await query.get<{ GithubBackupPat: string; GithubBackupRepo: string }>('SELECT GithubBackupPat, GithubBackupRepo FROM FarmSettings LIMIT 1');
-    if (currentGit) {
-      if (!currentGit.GithubBackupPat || !currentGit.GithubBackupRepo) {
-        await query.run(`
-          UPDATE FarmSettings
-          SET GithubBackupPat = ?, GithubBackupRepo = ?, GithubBackupBranch = ?, GithubBackupPath = ?
-          WHERE Id = 1
-        `, [
-          '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',
-          'devrupeshgadkhe/Poultry360-Backups',
-          'main',
-          'backups'
-        ]);
-        console.log('Pre-configured GitHub Backup credentials successfully seeded into FarmSettings.');
-      }
-    }
+    await query.run(`
+      UPDATE FarmSettings
+      SET GithubBackupPat = NULL
+      WHERE GithubBackupPat LIKE 'ghp_%' AND GithubBackupPat = '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'
+    `);
   } catch (err: any) {
-    console.error("Failed to seed default GitHub credentials:", err.message);
+    // ignore
   }
 }

@@ -2,8 +2,8 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import { query } from './db.js';
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://vrujjlytlbjezesupoxq.supabase.co';
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN';
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://vrujjlytlbjezesupoxq.supabase.co';
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN';
 
 export const supabaseServer = createClient(supabaseUrl, supabaseAnonKey);
 

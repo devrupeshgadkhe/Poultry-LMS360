@@ -168,7 +168,10 @@ export async function getGitHubConfig() {
       'SELECT GithubBackupPat, GithubBackupRepo, GithubBackupBranch, GithubBackupPath FROM FarmSettings LIMIT 1'
     );
     if (farm) {
-      const pat = farm.GithubBackupPat || process.env.GITHUB_BACKUP_PAT || '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';
+      let pat = farm.GithubBackupPat || process.env.GITHUB_BACKUP_PAT || '';
+      if (pat.startsWith('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')) {
+        pat = process.env.GITHUB_BACKUP_PAT || '';
+      }
       const repo = farm.GithubBackupRepo || process.env.GITHUB_BACKUP_REPO || 'devrupeshgadkhe/Poultry360-Backups';
       const branch = farm.GithubBackupBranch || process.env.GITHUB_BACKUP_BRANCH || 'main';
       const folderPath = farm.GithubBackupPath || process.env.GITHUB_BACKUP_PATH || 'backups';
@@ -177,8 +180,12 @@ export async function getGitHubConfig() {
   } catch (e) {
     console.warn('[GitHub Backup] Error loading config from DB:', e);
   }
+  let pat = process.env.GITHUB_BACKUP_PAT || '';
+  if (pat.startsWith('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')) {
+    pat = '';
+  }
   return {
-    pat: process.env.GITHUB_BACKUP_PAT || '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',
+    pat,
     repo: process.env.GITHUB_BACKUP_REPO || 'devrupeshgadkhe/Poultry360-Backups',
     branch: process.env.GITHUB_BACKUP_BRANCH || 'main',
     folderPath: process.env.GITHUB_BACKUP_PATH || 'backups'
@@ -263,6 +270,14 @@ export async function uploadToGitHub(filename: string, contentStr: string): Prom
 
     if (!response.ok) {
       const errText = await response.text();
+      // Case 0: 401 Unauthorized - Bad credentials or expired Personal Access Token
+      if (response.status === 401) {
+        console.warn('[GitHub Backup] GitHub API credentials unauthorized or token expired. Clearing invalid token from settings.');
+        try {
+          await query.run('UPDATE FarmSettings SET GithubBackupPat = NULL WHERE GithubBackupPat = ?', [cleanPat]);
+        } catch {}
+        return null;
+      }
       // Case 1: If repository is empty, specifying 'branch' fails with 409 "reference already exists".
       // We retry without specifying 'branch' to let GitHub initialize the default branch.
       if (response.status === 409 && errText.includes('reference already exists')) {
@@ -339,8 +354,8 @@ export async function uploadToGitHub(filename: string, contentStr: string): Prom
     console.log(`[GitHub Backup] Successfully uploaded backup to GitHub! Commit SHA: ${result.commit?.sha || 'unknown'}`);
     return result;
   } catch (err: any) {
-    console.error(`[GitHub Backup] Error uploading backup: ${err.message}`);
-    throw err;
+    console.warn(`[GitHub Backup] Notice during GitHub upload: ${err.message}`);
+    return null;
   }
 }
 
@@ -408,7 +423,7 @@ export async function triggerAutoBackup(): Promise<{ filename: string; size: num
       await uploadToGitHub(filename, content);
     }
   } catch (gitErr: any) {
-    console.error('[GitHub Backup] Auto backup failed to upload to GitHub:', gitErr.message);
+    console.warn('[GitHub Backup] Auto backup could not be uploaded to GitHub:', gitErr.message);
   }
 
   const stat = fs.statSync(filepath);
@@ -756,7 +771,10 @@ export const backupControllers = {
       const filename = `manual_backup_${cleanFarm}_${timestamp}.json`;
       const content = JSON.stringify(encryptedBackup, null, 2);
 
-      await uploadToGitHub(filename, content);
+      const uploadResult = await uploadToGitHub(filename, content);
+      if (!uploadResult) {
+        return res.status(400).json({ error: 'GitHub upload could not complete. Please check that your Personal Access Token is valid and has repository permissions.' });
+      }
       res.json({ message: 'Database backup synchronized to secure cloud repository successfully.' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
