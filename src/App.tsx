@@ -21,8 +21,16 @@ import {
   Menu,
   X,
   BarChart3,
-  Key
+  Key,
+  User,
+  LogIn,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+  Sparkles,
+  Layers
 } from 'lucide-react';
+import farmHeroImage from './assets/images/poultry_farm_hero_1789227033408.jpg';
 
 import Dashboard from './components/Dashboard';
 import Flocks from './components/Flocks';
@@ -79,10 +87,27 @@ export default function App() {
   const [username, setUsername] = useState<string | null>(localStorage.getItem('userName'));
   const [userRole, setUserRole] = useState<string | null>(localStorage.getItem('userRole'));
   const [userEmail, setUserEmail] = useState<string | null>(localStorage.getItem('userEmail'));
+  const [userPermissions, setUserPermissions] = useState<string>(() => {
+    const saved = localStorage.getItem('userPermissions');
+    if (saved !== null) return saved;
+    const tok = localStorage.getItem('token');
+    if (tok) {
+      try {
+        const payload = JSON.parse(atob(tok));
+        if (payload.Permissions) {
+          localStorage.setItem('userPermissions', payload.Permissions);
+          return payload.Permissions;
+        }
+      } catch (e) {}
+    }
+    return '';
+  });
 
   // Auth Inputs
   const [authUsername, setAuthUsername] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   // Layout navigation states
@@ -318,26 +343,53 @@ export default function App() {
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    setAuthLoading(true);
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: authUsername, password: authPassword }),
+        body: JSON.stringify({ username: authUsername.trim(), password: authPassword }),
       });
 
       const data = await res.json();
       if (!res.ok) {
-        setLoginError(data.error || 'Authentication rejected by database seeds.');
+        setLoginError(data.error || 'Incorrect username or password. Please try again.');
       } else {
         localStorage.setItem('token', data.token);
         localStorage.setItem('userName', data.user.Username);
         localStorage.setItem('userRole', data.user.Role);
         localStorage.setItem('userEmail', data.user.Email);
+        const perms = data.user.Permissions || (data.user.Role === 'Admin' || data.user.Role === 'Developer' ? 'All' : '');
+        localStorage.setItem('userPermissions', perms);
 
         setToken(data.token);
         setUsername(data.user.Username);
         setUserRole(data.user.Role);
         setUserEmail(data.user.Email);
+        setUserPermissions(perms);
+
+        // If the user does not have permission to view Dashboard, auto-navigate to their first permitted tab
+        const role = data.user.Role;
+        const pLower = perms.toLowerCase();
+        if (role !== 'Developer' && role !== 'Admin' && !pLower.includes('dashboard.view') && pLower !== 'all') {
+          if (pLower.includes('dailylogs.view')) {
+            setActiveTab('Daily Logs');
+          } else if (pLower.includes('flocks.view')) {
+            setActiveTab('Layer Flocks');
+          } else if (pLower.includes('sales.view')) {
+            setActiveTab('Sales Desk');
+          } else if (pLower.includes('inventory.view')) {
+            setActiveTab('Warehouse Stock');
+          } else if (pLower.includes('health.view')) {
+            setActiveTab('Vaccinations');
+          } else if (pLower.includes('purchases.view')) {
+            setActiveTab('Procurement');
+          } else if (pLower.includes('financials.view')) {
+            setActiveTab('Finance Ledgers');
+          } else if (pLower.includes('reports.view')) {
+            setActiveTab('Reports & Ledgers');
+          }
+        }
 
         // Record a safety backup right after login succeeds
         fetch('/api/backups/auto', { method: 'POST' }).catch(err => {
@@ -345,7 +397,9 @@ export default function App() {
         });
       }
     } catch (err: any) {
-      setLoginError(err.message || 'Connection failure to database system');
+      setLoginError(err.message || 'Unable to connect to server. Please check your network connection.');
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -357,91 +411,345 @@ export default function App() {
       setUsername(null);
       setUserRole(null);
       setUserEmail(null);
+      setUserPermissions('');
     });
   };
 
-  // If unauthorized, demonstrate raw login screen template
+  // If unauthorized, render bright, modern split login screen
   if (!token) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 selection:bg-indigo-500 selection:text-white" id="erp-login-screen">
-        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-6 shadow-2xl relative overflow-hidden">
-          <div className="absolute -top-32 -right-32 w-64 h-64 bg-indigo-600/10 rounded-full blur-3xl"></div>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-emerald-50/40 flex flex-col items-center justify-center p-4 sm:p-6 lg:p-10 font-sans selection:bg-emerald-500 selection:text-white" id="erp-login-screen">
+        <div className="w-full max-w-5xl bg-white border border-slate-200/90 rounded-3xl shadow-2xl shadow-slate-200/80 overflow-hidden grid grid-cols-1 lg:grid-cols-12">
           
-          <div className="text-center space-y-1 relative">
-            <span className="text-[10px] bg-indigo-500/10 text-indigo-400 font-mono font-bold px-2.5 py-1 rounded-full border border-indigo-500/20 uppercase tracking-widest inline-block">
-              Agricultural ERP Portal
-            </span>
-            <h1 className="text-3xl font-bold font-display text-white tracking-tight mt-3">Poultry LMS 360</h1>
-            <p className="text-slate-400 text-xs">Direct double-entry ledgering & layers flock metrics core</p>
+          {/* Left Column: Login Form */}
+          <div className="lg:col-span-6 xl:col-span-5 p-8 sm:p-10 lg:p-12 flex flex-col justify-between bg-white">
+            <div>
+              {/* Brand Header */}
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-600/25">
+                  <Layers className="w-6 h-6" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-900 tracking-tight leading-tight">Poultry LMS 360</h1>
+                  <p className="text-xs text-slate-500 font-medium">Layer Farm Management System</p>
+                </div>
+              </div>
+
+              {/* Title Section */}
+              <div className="mt-8 mb-6">
+                <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Sign In</h2>
+                <p className="text-xs sm:text-sm text-slate-500 mt-1.5 leading-relaxed">
+                  Enter your credentials below to access your farm dashboard and operational records.
+                </p>
+              </div>
+
+              {/* Form Body */}
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
+                {loginError && (
+                  <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
+                    <div>
+                      <span className="font-semibold block">Login Error</span>
+                      <span>{loginError}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Username Input */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Username or Email
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <User className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Enter username or email"
+                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 text-slate-900 rounded-xl text-sm focus:outline-hidden focus:bg-white focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 transition-all font-medium"
+                      value={authUsername}
+                      onChange={(e) => setAuthUsername(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {/* Password Input */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      placeholder="Enter password"
+                      className="w-full pl-10 pr-11 py-3 bg-slate-50 border border-slate-300 text-slate-900 rounded-xl text-sm focus:outline-hidden focus:bg-white focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 transition-all font-medium"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Primary Action Button */}
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full py-3.5 px-5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-sm font-semibold tracking-wide shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70 mt-5"
+                  id="submit-login-btn"
+                >
+                  {authLoading ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <span>Signing in...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Login</span>
+                      <LogIn className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
+            </div>
+
+            {/* Footer note */}
+            <div className="pt-6 mt-6 border-t border-slate-100 text-[11px] text-slate-400 flex items-center justify-between">
+              <span>Encrypted Session</span>
+              <span>All Farm Records Protected</span>
+            </div>
           </div>
 
-          <form onSubmit={handleLoginSubmit} className="space-y-4 relative">
-            {loginError && (
-              <div className="p-3.5 bg-rose-950/40 border border-rose-900 text-rose-300 rounded-2xl text-xs font-mono">
-                <b>Authentication Exception:</b> {loginError}
+          {/* Right Column: Poultry Farm Image & System Highlights */}
+          <div className="lg:col-span-6 xl:col-span-7 relative min-h-[460px] lg:min-h-full flex flex-col justify-between p-8 sm:p-10 lg:p-12 overflow-hidden bg-slate-900">
+            {/* Background Image */}
+            <img
+              src={farmHeroImage}
+              alt="Poultry Layer Farm"
+              className="absolute inset-0 w-full h-full object-cover object-center"
+              referrerPolicy="no-referrer"
+            />
+            
+            {/* Gradient Overlay for high legibility */}
+            <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/75 to-slate-900/40" />
+
+            {/* Top Pill */}
+            <div className="relative z-10 flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/20 backdrop-blur-md text-white text-xs font-semibold border border-white/25 shadow-xs">
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                Layer Farm Operations
+              </span>
+              <span className="text-xs text-white/90 font-medium tracking-wide">Poultry LMS 360</span>
+            </div>
+
+            {/* Bottom Highlights Container */}
+            <div className="relative z-10 mt-12 space-y-4">
+              <div>
+                <h3 className="text-xl sm:text-2xl font-bold text-white tracking-tight leading-snug">
+                  Smart Management for Layer Poultry Farms
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-200 mt-1 leading-relaxed max-w-lg">
+                  Designed specifically for commercial egg producers to simplify daily flock records, feed milling, inventory, and accounting.
+                </p>
               </div>
-            )}
 
-            <div className="space-y-1.5 focus-within:text-indigo-400 text-slate-400 smooth-hover">
-              <label className="text-[10px] font-bold uppercase tracking-wider font-sans block">Operator Username / Email</label>
-              <input
-                type="text"
-                required
-                placeholder="Enter username or email"
-                className="w-full px-4 py-3 bg-slate-950 border border-slate-800 text-white rounded-xl text-sm focus:outline-hidden focus:border-indigo-500 font-mono"
-                value={authUsername}
-                onChange={(e) => setAuthUsername(e.target.value)}
-              />
+              {/* 4 Feature Highlight Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
+                <div className="bg-slate-900/65 backdrop-blur-md p-3.5 rounded-2xl border border-white/10">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                    </div>
+                    <h4 className="text-xs font-bold text-white">Daily Production</h4>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-normal">
+                    Track daily eggs collected, damaged eggs, feed bags used, and bird mortality.
+                  </p>
+                </div>
+
+                <div className="bg-slate-900/65 backdrop-blur-md p-3.5 rounded-2xl border border-white/10">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
+                      <Activity className="w-3.5 h-3.5" />
+                    </div>
+                    <h4 className="text-xs font-bold text-white">Flock Performance</h4>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-normal">
+                    Real-time laying percentage curves, flock age in weeks, and production efficiency.
+                  </p>
+                </div>
+
+                <div className="bg-slate-900/65 backdrop-blur-md p-3.5 rounded-2xl border border-white/10">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-6 h-6 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 border border-blue-500/30">
+                      <Workflow className="w-3.5 h-3.5" />
+                    </div>
+                    <h4 className="text-xs font-bold text-white">Feed & Milling</h4>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-normal">
+                    Raw ingredient formulas, batch milling batches, and stock deduction.
+                  </p>
+                </div>
+
+                <div className="bg-slate-900/65 backdrop-blur-md p-3.5 rounded-2xl border border-white/10">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="w-6 h-6 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0 border border-purple-500/30">
+                      <BarChart3 className="w-3.5 h-3.5" />
+                    </div>
+                    <h4 className="text-xs font-bold text-white">Sales & Ledgers</h4>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-normal">
+                    Customer egg billing, feed purchases, cash vouchers, and profitability reports.
+                  </p>
+                </div>
+              </div>
             </div>
 
-            <div className="space-y-1.5 text-slate-400 focus-within:text-indigo-400 smooth-hover">
-              <label className="text-[10px] font-bold uppercase tracking-wider font-sans block">Secure Password / PIN</label>
-              <input
-                type="password"
-                required
-                placeholder="Enter password"
-                className="w-full px-4 py-3 bg-slate-950 border border-slate-800 text-white rounded-xl text-sm focus:outline-hidden focus:border-indigo-500 font-mono"
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-              />
-            </div>
+          </div>
+        </div>
 
-            <button
-              type="submit"
-              className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-bold font-mono tracking-wide shadow-lg shadow-indigo-600/15 smooth-hover focus:outline-hidden mt-6 cursor-pointer"
-              id="submit-login-btn"
-            >
-              Authorize System Keys
-            </button>
-          </form>
+        {/* Bottom Copyright Notice */}
+        <div className="mt-6 text-center text-xs text-slate-500 font-medium tracking-wide">
+          <p>© {new Date().getFullYear()} Pradipayan Software Solutions. All rights reserved.</p>
         </div>
       </div>
     );
   }
 
+  // Check if current user has a specific granular claim
+  const hasPermission = (claim?: string): boolean => {
+    if (!userRole) return false;
+    if (userRole === 'Developer') return true;
+    if (userRole === 'Admin') return true;
+    
+    const perms = (userPermissions || '').trim().toLowerCase();
+    if (perms === 'all' || perms.includes('admin')) return true;
+    if (!claim) return true;
+    
+    const list = perms.split(',').map(p => p.trim());
+    return list.includes(claim.toLowerCase());
+  };
+
+  // Check if current user can access a specific navigation tab
+  const canAccessTab = (tabName: Tab): boolean => {
+    if (!userRole) return false;
+    if (userRole === 'Developer') return true;
+    
+    // Developer-exclusive tools
+    if (tabName === 'Super Admin Console' || tabName === 'Legacy Migrator' || tabName === 'SQL CLI Console') {
+      return false;
+    }
+    
+    // Farm Admin or Developer tools
+    if (tabName === 'User Access') {
+      return userRole === 'Admin' || hasPermission('admin');
+    }
+    if (tabName === 'Farm Settings & Access') {
+      return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
+    }
+    if (tabName === 'Backups') {
+      return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
+    }
+    if (tabName === 'Bulk Data Import') {
+      return userRole === 'Admin' || hasPermission('bulkimport.view') || hasPermission('admin');
+    }
+
+    if (userRole === 'Admin') return true;
+
+    // Granular operational modules for Staff / Operator
+    switch (tabName) {
+      case 'Dashboard':
+        return hasPermission('dashboard.view');
+      case 'Layer Flocks':
+        return hasPermission('flocks.view');
+      case 'Daily Logs':
+        return hasPermission('dailylogs.view');
+      case 'Vaccinations':
+        return hasPermission('health.view');
+      case 'Warehouse Stock':
+        return hasPermission('inventory.view');
+      case 'Milling & Mix':
+        return hasPermission('inventory.view');
+      case 'Stakeholders':
+        return hasPermission('customers.view') || hasPermission('suppliers.view');
+      case 'Procurement':
+        return hasPermission('purchases.view');
+      case 'Sales Desk':
+        return hasPermission('sales.view');
+      case 'Finance Ledgers':
+        return hasPermission('financials.view');
+      case 'Reports & Ledgers':
+        return hasPermission('reports.view');
+      default:
+        return false;
+    }
+  };
+
   // Define navigations mapping
-  const menuItems: { name: Tab; icon: any; roles?: string[] }[] = [
-    { name: 'Dashboard', icon: LayoutDashboard },
-    { name: 'Layer Flocks', icon: Activity },
-    { name: 'Daily Logs', icon: FileSpreadsheet },
-    { name: 'Vaccinations', icon: CalendarCheck },
-    { name: 'Milling & Mix', icon: Workflow },
-    { name: 'Procurement', icon: Settings },
-    { name: 'Sales Desk', icon: Settings },
-    { name: 'Warehouse Stock', icon: Settings },
-    { name: 'Stakeholders', icon: Contact2 },
-    { name: 'Finance Ledgers', icon: Settings },
-    { name: 'Reports & Ledgers', icon: BarChart3 },
-    { name: 'Bulk Data Import', icon: FileSpreadsheet },
+  const menuItems: { name: Tab; icon: any; roles?: string[]; permission?: string }[] = [
+    { name: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
+    { name: 'Layer Flocks', icon: Activity, permission: 'flocks.view' },
+    { name: 'Daily Logs', icon: FileSpreadsheet, permission: 'dailylogs.view' },
+    { name: 'Vaccinations', icon: CalendarCheck, permission: 'health.view' },
+    { name: 'Milling & Mix', icon: Workflow, permission: 'inventory.view' },
+    { name: 'Procurement', icon: Settings, permission: 'purchases.view' },
+    { name: 'Sales Desk', icon: Settings, permission: 'sales.view' },
+    { name: 'Warehouse Stock', icon: Settings, permission: 'inventory.view' },
+    { name: 'Stakeholders', icon: Contact2, permission: 'customers.view' },
+    { name: 'Finance Ledgers', icon: Settings, permission: 'financials.view' },
+    { name: 'Reports & Ledgers', icon: BarChart3, permission: 'reports.view' },
+    { name: 'Bulk Data Import', icon: FileSpreadsheet, roles: ['Developer', 'Admin'], permission: 'bulkimport.view' },
     { name: 'Super Admin Console', icon: Shield, roles: ['Developer'] },
     { name: 'Legacy Migrator', icon: Database, roles: ['Developer'] },
-    { name: 'User Access', icon: Key, roles: ['Developer'] },
+    { name: 'User Access', icon: Key, roles: ['Developer', 'Admin'] },
     { name: 'SQL CLI Console', icon: Database, roles: ['Developer'] },
-    { name: 'Backups', icon: Cloud },
-    { name: 'Farm Settings & Access', icon: Settings },
+    { name: 'Backups', icon: Cloud, roles: ['Developer', 'Admin'], permission: 'settings.view' },
+    { name: 'Farm Settings & Access', icon: Settings, roles: ['Developer', 'Admin'], permission: 'settings.view' },
   ];
 
+  // Auto-switch to the first permitted tab if the current activeTab is not permitted
+  useEffect(() => {
+    if (token && userRole) {
+      if (!canAccessTab(activeTab)) {
+        const firstPermitted = menuItems.find((item) => {
+          if (item.roles && !item.roles.includes(userRole || '')) return false;
+          return canAccessTab(item.name);
+        });
+        if (firstPermitted) {
+          setActiveTab(firstPermitted.name);
+        }
+      }
+    }
+  }, [token, userRole, userPermissions, activeTab]);
+
   const renderActiveComponent = () => {
+    if (!canAccessTab(activeTab)) {
+      return (
+        <div className="flex flex-col items-center justify-center p-12 bg-white rounded-2xl border border-slate-200 text-center max-w-lg mx-auto mt-12 shadow-sm space-y-4 font-sans" id="restricted-access-banner">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-200">
+            <ShieldAlert className="w-7 h-7" />
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-base font-bold text-slate-800">Module Access Restricted</h2>
+            <p className="text-xs text-slate-500 max-w-sm">
+              Your operator account does not have authorization to view "{activeTab}". Please contact your Farm Administrator to adjust access permissions.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
     switch (activeTab) {
       case 'Dashboard':
         return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
@@ -487,7 +795,7 @@ export default function App() {
         }
         return <LegacyMigrator userRole={userRole} />;
       case 'User Access':
-        if (userRole !== 'Developer') {
+        if (userRole !== 'Developer' && userRole !== 'Admin') {
           return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
         }
         return <UserAccessManager />;
@@ -538,6 +846,9 @@ export default function App() {
         <nav className={`flex-1 overflow-y-auto p-3 space-y-1.5 max-h-[60vh] md:max-h-none border-b border-[#0d452f]/50 md:border-b-0 ${mobileMenuOpen ? 'block animate-fade-in' : 'hidden md:block'}`} id="sidebar-navigator-block">
           {menuItems.map((item) => {
             if (item.roles && !item.roles.includes(userRole || '')) {
+              return null;
+            }
+            if (!canAccessTab(item.name)) {
               return null;
             }
             const Icon = item.icon;

@@ -35,6 +35,20 @@ export interface UserAccount {
   FarmName?: string;
 }
 
+const MODULE_PERMISSIONS_MATRIX = [
+  { module: 'Dashboard Metrics', view: 'dashboard.view' },
+  { module: 'Layer Flocks Registry', view: 'flocks.view', create: 'flocks.create', edit: 'flocks.edit', delete: 'flocks.delete' },
+  { module: 'Daily Progress Logs', view: 'dailylogs.view', create: 'dailylogs.create', edit: 'dailylogs.edit', delete: 'dailylogs.delete' },
+  { module: 'Flock Vaccinations', view: 'health.view', create: 'health.create', edit: 'health.edit', delete: 'health.delete' },
+  { module: 'Warehouse Stock Lists', view: 'inventory.view', create: 'inventory.create', edit: 'inventory.edit', delete: 'inventory.delete' },
+  { module: 'Stakeholders Ledgering', view: 'customers.view', create: 'customers.create', edit: 'customers.edit', delete: 'customers.delete' },
+  { module: 'Procurement Purchases', view: 'purchases.view', create: 'purchases.create', edit: 'purchases.edit', delete: 'purchases.delete' },
+  { module: 'POS Customer Sales Desk', view: 'sales.view', create: 'sales.create', edit: 'sales.edit', delete: 'sales.delete' },
+  { module: 'Double-entry Dynamic Ledger', view: 'financials.view', create: 'financials.create', edit: 'financials.edit', delete: 'financials.delete' },
+  { module: 'Analytical Performance Reports', view: 'reports.view' },
+  { module: 'Farm Settings & Backups', view: 'settings.view', edit: 'settings.edit' },
+];
+
 export const UserAccessManager: React.FC = () => {
   const { farms, currentFarm, refreshFarms } = useFarm();
   const [users, setUsers] = useState<UserAccount[]>([]);
@@ -59,7 +73,8 @@ export const UserAccessManager: React.FC = () => {
     Role: (localStorage.getItem('userRole') === 'Developer' ? 'Admin' : 'Staff') as 'Developer' | 'Admin' | 'Staff',
     FarmId: 1,
     Password: '',
-    IsActive: true
+    IsActive: true,
+    Permissions: 'dailylogs.view,dailylogs.create'
   });
 
   // Quick Password Reset Modal
@@ -114,7 +129,8 @@ export const UserAccessManager: React.FC = () => {
       Role: (myRole === 'Developer' ? 'Admin' : 'Staff') as any,
       FarmId: currentFarm?.Id || 1,
       Password: '',
-      IsActive: true
+      IsActive: true,
+      Permissions: 'dailylogs.view,dailylogs.create'
     });
     setIsModalOpen(true);
   };
@@ -132,9 +148,34 @@ export const UserAccessManager: React.FC = () => {
       Role: user.Role,
       FarmId: user.FarmId || 1,
       Password: user.PlainPassword || '',
-      IsActive: Boolean(user.IsActive)
+      IsActive: Boolean(user.IsActive),
+      Permissions: user.Permissions || (user.Role === 'Admin' || user.Role === 'Developer' ? 'All' : '')
     });
     setIsModalOpen(true);
+  };
+
+  const togglePermission = (claim: string) => {
+    const current = (modalForm.Permissions || '')
+      .split(',')
+      .map(p => p.trim().toLowerCase())
+      .filter(Boolean);
+    const target = claim.toLowerCase();
+    let updated: string[];
+    if (current.includes(target)) {
+      updated = current.filter(p => p !== target);
+    } else {
+      updated = [...current, target];
+    }
+    setModalForm(prev => ({ ...prev, Permissions: updated.join(',') }));
+  };
+
+  const hasModalPermission = (claim: string) => {
+    if (modalForm.Permissions === 'All') return true;
+    const current = (modalForm.Permissions || '')
+      .split(',')
+      .map(p => p.trim().toLowerCase())
+      .filter(Boolean);
+    return current.includes(claim.toLowerCase());
   };
 
   const handleSaveUser = async (e: React.FormEvent) => {
@@ -143,6 +184,7 @@ export const UserAccessManager: React.FC = () => {
 
     const targetRole = myRole === 'Developer' ? modalForm.Role : 'Staff';
     const targetFarmId = myRole === 'Developer' ? Number(modalForm.FarmId) : (currentFarm?.Id || 1);
+    const permissionsVal = (targetRole === 'Admin' || targetRole === 'Developer') ? 'All' : modalForm.Permissions;
 
     try {
       if (editingUser) {
@@ -160,7 +202,9 @@ export const UserAccessManager: React.FC = () => {
             FullName: modalForm.FullName,
             IsActive: modalForm.IsActive,
             password: modalForm.Password,
-            FarmId: targetFarmId
+            FarmId: targetFarmId,
+            Permissions: permissionsVal,
+            permissions: permissionsVal
           })
         });
 
@@ -190,7 +234,8 @@ export const UserAccessManager: React.FC = () => {
             role: targetRole,
             fullName: modalForm.FullName,
             farmId: targetFarmId,
-            permissions: targetRole === 'Admin' ? 'All' : ''
+            permissions: permissionsVal,
+            Permissions: permissionsVal
           })
         });
 
@@ -495,6 +540,11 @@ export const UserAccessManager: React.FC = () => {
                         >
                           {user.Role === 'Developer' ? '👑 Developer (SuperAdmin)' : user.Role}
                         </span>
+                        {user.Role === 'Staff' && (
+                          <div className="mt-1 text-[10px] text-slate-500 font-mono truncate max-w-[160px]" title={user.Permissions || 'No permissions assigned'}>
+                            {user.Permissions === 'All' ? '⚡ All Access' : (user.Permissions ? `${user.Permissions.split(',').filter(Boolean).length} Perms` : '🔒 No Access')}
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-4 px-4">
@@ -735,6 +785,112 @@ export const UserAccessManager: React.FC = () => {
                   Account is Active and authorized to login
                 </label>
               </div>
+
+              {/* Granular permissions picker for Staff/Operator */}
+              {modalForm.Role === 'Staff' && (
+                <div className="pt-3 border-t border-slate-100 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-800">
+                        Operator Module Permissions <span className="text-indigo-600 font-normal">(Granular Access)</span>
+                      </label>
+                      <p className="text-[10px] text-slate-500">
+                        Select which operational modules and actions this operator can see and perform.
+                      </p>
+                    </div>
+
+                    {/* Presets */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setModalForm(prev => ({ ...prev, Permissions: 'dailylogs.view,dailylogs.create' }))}
+                        className="px-2 py-1 text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition cursor-pointer"
+                      >
+                        Daily Logs Only
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModalForm(prev => ({ ...prev, Permissions: 'dailylogs.view,dailylogs.create,flocks.view' }))}
+                        className="px-2 py-1 text-[10px] font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition cursor-pointer"
+                      >
+                        Logs & Flocks
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModalForm(prev => ({ ...prev, Permissions: 'All' }))}
+                        className="px-2 py-1 text-[10px] font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition cursor-pointer"
+                      >
+                        All Modules
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModalForm(prev => ({ ...prev, Permissions: '' }))}
+                        className="px-2 py-1 text-[10px] font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg transition cursor-pointer"
+                      >
+                        Clear All
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 max-h-56 overflow-y-auto space-y-2.5 font-sans">
+                    {MODULE_PERMISSIONS_MATRIX.map((m) => {
+                      const isViewChecked = hasModalPermission(m.view);
+                      return (
+                        <div key={m.module} className="flex flex-col sm:flex-row sm:items-center justify-between pb-2 border-b border-slate-200/60 last:border-b-0 last:pb-0 gap-1.5">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id={`perm-${m.view}`}
+                              checked={isViewChecked}
+                              onChange={() => togglePermission(m.view)}
+                              className="w-3.5 h-3.5 text-indigo-600 rounded cursor-pointer"
+                            />
+                            <label htmlFor={`perm-${m.view}`} className="text-xs font-semibold text-slate-800 cursor-pointer">
+                              {m.module}
+                            </label>
+                          </div>
+
+                          <div className="flex items-center gap-2.5 pl-5 sm:pl-0">
+                            {m.create && (
+                              <label className="flex items-center gap-1 text-[10px] text-slate-600 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={hasModalPermission(m.create)}
+                                  onChange={() => togglePermission(m.create)}
+                                  className="w-3 h-3 text-emerald-600 rounded cursor-pointer"
+                                />
+                                Add
+                              </label>
+                            )}
+                            {m.edit && (
+                              <label className="flex items-center gap-1 text-[10px] text-slate-600 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={hasModalPermission(m.edit)}
+                                  onChange={() => togglePermission(m.edit)}
+                                  className="w-3 h-3 text-blue-600 rounded cursor-pointer"
+                                />
+                                Edit
+                              </label>
+                            )}
+                            {m.delete && (
+                              <label className="flex items-center gap-1 text-[10px] text-slate-600 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={hasModalPermission(m.delete)}
+                                  onChange={() => togglePermission(m.delete)}
+                                  className="w-3 h-3 text-rose-600 rounded cursor-pointer"
+                                />
+                                Revert
+                              </label>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-2">
                 <button

@@ -92,6 +92,10 @@ export async function createSupabaseUser(userData: {
 }) {
   const hash = crypto.createHash('sha256').update(userData.password).digest('hex');
 
+  const targetPerms = userData.permissions !== undefined 
+    ? userData.permissions 
+    : (userData.role === 'Admin' || userData.role === 'Developer' ? 'All' : '');
+
   const { data, error } = await supabaseServer
     .from('Users')
     .insert([{
@@ -102,7 +106,7 @@ export async function createSupabaseUser(userData: {
       FullName: userData.fullName,
       FarmId: userData.farmId,
       IsActive: 1,
-      Permissions: userData.permissions || (userData.role === 'Admin' ? 'All' : '')
+      Permissions: targetPerms
     }])
     .select();
 
@@ -125,7 +129,7 @@ export async function createSupabaseUser(userData: {
       userData.password,
       userData.role,
       userData.fullName,
-      userData.permissions || '',
+      targetPerms,
       userData.farmId
     ]);
   } catch (err: any) {
@@ -181,6 +185,7 @@ export async function updateSupabaseUser(id: number, updateData: {
     if (patch.FullName) await query.run('UPDATE Users SET FullName = ? WHERE Id = ?', [patch.FullName, id]);
     if (patch.IsActive !== undefined) await query.run('UPDATE Users SET IsActive = ? WHERE Id = ?', [patch.IsActive, id]);
     if (patch.FarmId !== undefined) await query.run('UPDATE Users SET FarmId = ? WHERE Id = ?', [patch.FarmId, id]);
+    if (patch.Permissions !== undefined) await query.run('UPDATE Users SET Permissions = ? WHERE Id = ?', [patch.Permissions, id]);
   } catch (err: any) {
     console.warn('[Sync to SQLite] Warning on update:', err.message);
   }

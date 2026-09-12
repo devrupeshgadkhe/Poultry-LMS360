@@ -17,6 +17,15 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
   const [submitting, setSubmitting] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingLogId, setEditingLogId] = useState<number | null>(null);
+
+  // User role and granular permissions
+  const userRole = localStorage.getItem('userRole') || 'Staff';
+  const userPermsStr = (localStorage.getItem('userPermissions') || '').toLowerCase();
+  const isSuperOrAdmin = userRole === 'Developer' || userRole === 'Admin' || userPermsStr === 'all' || userPermsStr.includes('admin');
+
+  const canCreate = isSuperOrAdmin || userPermsStr.includes('dailylogs.create');
+  const canEdit = isSuperOrAdmin || userPermsStr.includes('dailylogs.edit');
+  const canDelete = isSuperOrAdmin || userPermsStr.includes('dailylogs.delete');
   
   const [newLog, setNewLog] = useState({
     FlockId: '',
@@ -213,6 +222,14 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (editingLogId && !canEdit) {
+      alert('Security Alert: You do not have permission to edit daily logs.');
+      return;
+    }
+    if (!editingLogId && !canCreate) {
+      alert('Security Alert: You do not have permission to add daily logs.');
+      return;
+    }
     if (!newLog.FlockId) return alert('Please select a flock.');
     
     try {
@@ -259,6 +276,10 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
   };
 
   const deleteLog = async (id: number) => {
+    if (!canDelete) {
+      alert('Security Alert: You do not have permission to revert or delete daily logs.');
+      return;
+    }
     if (!confirm('Revert log? This reverses historical feed values and subtracts collected eggs.')) return;
     try {
       try {
@@ -289,20 +310,22 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
           </h1>
           <p className="text-slate-500 text-xs sm:text-sm mt-1">{t.dailyLogsSub}</p>
         </div>
-        <button
-          onClick={() => {
-            if (showAddForm) {
-              cancelForm();
-            } else {
-              setShowAddForm(true);
-            }
-          }}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs sm:text-sm font-semibold smooth-hover shadow-xs shrink-0 self-start sm:self-center"
-          id="toggle-add-log-btn"
-        >
-          <Plus className="h-4 w-4 shrink-0" />
-          {editingLogId ? 'Editing Record' : t.addDailyLog}
-        </button>
+        {canCreate && (
+          <button
+            onClick={() => {
+              if (showAddForm) {
+                cancelForm();
+              } else {
+                setShowAddForm(true);
+              }
+            }}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs sm:text-sm font-semibold smooth-hover shadow-xs shrink-0 self-start sm:self-center cursor-pointer"
+            id="toggle-add-log-btn"
+          >
+            <Plus className="h-4 w-4 shrink-0" />
+            {editingLogId ? 'Editing Record' : t.addDailyLog}
+          </button>
+        )}
       </div>
 
       {showAddForm && (
@@ -737,22 +760,29 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
                       <td className="px-5 py-3.5 text-xs text-slate-400 max-w-xs truncate" title={log.Notes}>{log.Notes || '-'}</td>
                       <td className="px-5 py-3.5 text-right">
                         <div className="flex items-center justify-end gap-1.5 ml-auto">
-                          <button
-                            onClick={() => startEditLog(log)}
-                            className="p-1 px-2 border border-slate-200 hover:border-blue-200 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
-                            id={`edit-log-btn-${log.Id}`}
-                          >
-                            <Edit2 className="h-3 w-3" />
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => deleteLog(log.Id)}
-                            className="p-1 px-2 border border-slate-200 hover:border-red-200 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
-                            id={`del-log-btn-${log.Id}`}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Revert
-                          </button>
+                          {canEdit && (
+                            <button
+                              onClick={() => startEditLog(log)}
+                              className="p-1 px-2 border border-slate-200 hover:border-blue-200 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg smooth-hover text-xs flex gap-1 items-center cursor-pointer"
+                              id={`edit-log-btn-${log.Id}`}
+                            >
+                              <Edit2 className="h-3 w-3" />
+                              Edit
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              onClick={() => deleteLog(log.Id)}
+                              className="p-1 px-2 border border-slate-200 hover:border-red-200 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg smooth-hover text-xs flex gap-1 items-center cursor-pointer"
+                              id={`del-log-btn-${log.Id}`}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              Revert
+                            </button>
+                          )}
+                          {!canEdit && !canDelete && (
+                            <span className="text-[10px] text-slate-400 font-mono italic">Read-only</span>
+                          )}
                         </div>
                       </td>
                     </tr>

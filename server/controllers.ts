@@ -97,15 +97,22 @@ export const authControllers = {
       }
 
       // Generate base64 mock token as stateless secure authorization
+      const rolePerms = (user.Role === 'Admin' || user.Role === 'Developer') ? 'All' : '';
+      const finalPerms = (user.Permissions && user.Permissions.trim() !== '') ? user.Permissions : rolePerms;
       const payload = { 
         Id: user.Id, 
         Username: user.Username, 
         Email: user.Email, 
         Role: user.Role, 
         FarmId: user.FarmId || 1,
-        Permissions: user.Permissions || '' 
+        Permissions: finalPerms 
       };
       const token = Buffer.from(JSON.stringify(payload)).toString('base64');
+
+      // Keep local SQLite permissions synchronized asynchronously
+      if (user.Id) {
+        query.run('UPDATE Users SET Permissions = ? WHERE Id = ?', [finalPerms, user.Id]).catch(() => {});
+      }
 
       await logAudit(req, user.Email, 'Auth', 'Login', { Username: username }, 'SUCCESS');
       res.json({ token, user: payload });

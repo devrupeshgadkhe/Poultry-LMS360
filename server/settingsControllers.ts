@@ -171,7 +171,8 @@ export const userManagementControllers = {
 
   // POST /api/users
   async createUser(req: Request, res: Response) {
-    const { username, email, password, role, fullName, permissions, farmId } = req.body;
+    const { username, email, password, role, fullName, permissions, Permissions, farmId } = req.body;
+    const targetPerms = permissions !== undefined ? permissions : (Permissions !== undefined ? Permissions : '');
     try {
       if (!username || !email || !password || !role || !fullName) {
         return res.status(400).json({ error: 'Username, Email, password, Role, and FullName are required fields.' });
@@ -184,7 +185,7 @@ export const userManagementControllers = {
         role,
         fullName,
         farmId: Number(farmId) || 1,
-        permissions
+        permissions: targetPerms
       });
 
       await logAudit(req, '', 'UserManagement', 'Create Operator Account', { Username: username, Role: role }, 'SUCCESS');
@@ -198,14 +199,15 @@ export const userManagementControllers = {
   // PUT /api/users/:id
   async updateUser(req: Request, res: Response) {
     const { id } = req.params;
-    const { Email, Role, FullName, IsActive, Permissions, password, FarmId } = req.body;
+    const { Email, Role, FullName, IsActive, Permissions, permissions, password, FarmId } = req.body;
+    const targetPerms = permissions !== undefined ? permissions : Permissions;
     try {
       await updateSupabaseUser(Number(id), {
         email: Email,
         role: Role,
         fullName: FullName,
         isActive: IsActive,
-        permissions: Permissions,
+        permissions: targetPerms,
         password,
         farmId: FarmId ? Number(FarmId) : undefined
       });
