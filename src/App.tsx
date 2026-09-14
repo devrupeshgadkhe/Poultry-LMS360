@@ -484,6 +484,8 @@ export default function App() {
         localStorage.setItem('userName', data.user.Username);
         localStorage.setItem('userRole', data.user.Role);
         localStorage.setItem('userEmail', data.user.Email);
+        const userFarm = Number(data.user.FarmId) || 1;
+        localStorage.setItem('userFarmId', String(userFarm));
         const perms = data.user.Permissions || (data.user.Role === 'Admin' || data.user.Role === 'Developer' ? 'All' : '');
         localStorage.setItem('userPermissions', perms);
 
@@ -492,6 +494,12 @@ export default function App() {
         setUserRole(data.user.Role);
         setUserEmail(data.user.Email);
         setUserPermissions(perms);
+
+        // Multi-tenant isolation: Lock active farm to assigned tenant farm for Farm Admins & Operators
+        if (data.user.Role !== 'Developer') {
+          localStorage.setItem('active_farm_id', String(userFarm));
+          switchFarm(userFarm);
+        }
 
         // If the user does not have permission to view Dashboard, auto-navigate to their first permitted tab
         const role = data.user.Role;

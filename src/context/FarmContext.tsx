@@ -41,8 +41,18 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (!error && data && data.length > 0) {
           setFarms(data);
-          const savedFarmId = localStorage.getItem('active_farm_id');
-          const matched = savedFarmId ? data.find((f: Farm) => f.Id === Number(savedFarmId)) : null;
+          const userRole = localStorage.getItem('userRole');
+          const userFarmId = localStorage.getItem('userFarmId');
+          let matched: Farm | undefined;
+          
+          if (userRole && userRole !== 'Developer' && userFarmId) {
+            // Farm Admins and Operators are strictly locked to their assigned Farm
+            matched = data.find((f: Farm) => f.Id === Number(userFarmId));
+          } else {
+            const savedFarmId = localStorage.getItem('active_farm_id');
+            matched = savedFarmId ? data.find((f: Farm) => f.Id === Number(savedFarmId)) : undefined;
+          }
+
           setCurrentFarm(matched || data[0]);
           setIsLoadingFarms(false);
           return;
@@ -57,8 +67,17 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const localFarms = await res.json();
         if (Array.isArray(localFarms) && localFarms.length > 0) {
           setFarms(localFarms);
-          const savedFarmId = localStorage.getItem('active_farm_id');
-          const matched = savedFarmId ? localFarms.find((f: Farm) => f.Id === Number(savedFarmId)) : null;
+          const userRole = localStorage.getItem('userRole');
+          const userFarmId = localStorage.getItem('userFarmId');
+          let matched: Farm | undefined;
+
+          if (userRole && userRole !== 'Developer' && userFarmId) {
+            matched = localFarms.find((f: Farm) => f.Id === Number(userFarmId));
+          } else {
+            const savedFarmId = localStorage.getItem('active_farm_id');
+            matched = savedFarmId ? localFarms.find((f: Farm) => f.Id === Number(savedFarmId)) : undefined;
+          }
+
           setCurrentFarm(matched || localFarms[0]);
         }
       }
@@ -74,6 +93,12 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const switchFarm = (farmId: number) => {
+    const userRole = localStorage.getItem('userRole');
+    const userFarmId = localStorage.getItem('userFarmId');
+    if (userRole && userRole !== 'Developer' && userFarmId && Number(userFarmId) !== farmId) {
+      console.warn('Unauthorized farm switch attempt blocked for non-developer.');
+      return;
+    }
     const selected = farms.find((f) => f.Id === farmId);
     if (selected) {
       setCurrentFarm(selected);

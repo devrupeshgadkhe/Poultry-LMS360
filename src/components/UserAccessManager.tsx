@@ -89,7 +89,15 @@ export const UserAccessManager: React.FC = () => {
   const fetchUsers = async () => {
     try {
       setIsLoading(true);
-      const res = await fetch('/api/users');
+      const token = localStorage.getItem('token') || '';
+      const farmId = currentFarm?.Id || Number(localStorage.getItem('userFarmId')) || 1;
+      const res = await fetch('/api/users', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'X-User-Role': myRole,
+          'X-Farm-Id': String(farmId)
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         setUsers(Array.isArray(data) ? data : []);
@@ -106,7 +114,7 @@ export const UserAccessManager: React.FC = () => {
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [currentFarm?.Id]);
 
   const togglePasswordVisibility = (userId: number) => {
     setShowPasswordMap(prev => ({ ...prev, [userId]: !prev[userId] }));
@@ -122,12 +130,16 @@ export const UserAccessManager: React.FC = () => {
 
   const handleOpenCreateModal = () => {
     setEditingUser(null);
+    const assignedFarmId = myRole === 'Developer' 
+      ? (currentFarm?.Id || 1) 
+      : (currentFarm?.Id || Number(localStorage.getItem('userFarmId')) || 1);
+
     setModalForm({
       Username: '',
       FullName: '',
       Email: '',
       Role: (myRole === 'Developer' ? 'Admin' : 'Staff') as any,
-      FarmId: currentFarm?.Id || 1,
+      FarmId: assignedFarmId,
       Password: '',
       IsActive: true,
       Permissions: 'dailylogs.view,dailylogs.create'
@@ -136,9 +148,16 @@ export const UserAccessManager: React.FC = () => {
   };
 
   const handleOpenEditModal = (user: UserAccount) => {
-    if (myRole !== 'Developer' && (user.Role === 'Developer' || user.Role === 'Admin')) {
-      setAlertMsg({ type: 'error', text: 'Security Restriction: Farm Administrators cannot modify Admin or Developer accounts.' });
-      return;
+    if (myRole !== 'Developer') {
+      if (user.Role === 'Developer') {
+        setAlertMsg({ type: 'error', text: 'सुरक्षा मर्यादा: फार्म ॲडमिनिस्ट्रेटर डेव्हलपर खात्यामध्ये बदल करू शकत नाहीत.' });
+        return;
+      }
+      const currentUserName = localStorage.getItem('userName');
+      if (user.Role === 'Admin' && user.Username !== currentUserName) {
+        setAlertMsg({ type: 'error', text: 'सुरक्षा मर्यादा: फार्म ॲडमिनिस्ट्रेटर इतर ॲडमिन खात्यामध्ये बदल करू शकत नाहीत.' });
+        return;
+      }
     }
     setEditingUser(user);
     setModalForm({
@@ -194,7 +213,8 @@ export const UserAccessManager: React.FC = () => {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
-            'X-User-Role': myRole
+            'X-User-Role': myRole,
+            'X-Farm-Id': String(targetFarmId)
           },
           body: JSON.stringify({
             Email: modalForm.Email,
@@ -225,7 +245,8 @@ export const UserAccessManager: React.FC = () => {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
-            'X-User-Role': myRole
+            'X-User-Role': myRole,
+            'X-Farm-Id': String(targetFarmId)
           },
           body: JSON.stringify({
             username: modalForm.Username,
@@ -267,12 +288,14 @@ export const UserAccessManager: React.FC = () => {
     setResetSuccess(null);
 
     try {
+      const activeFarmId = currentFarm?.Id || Number(localStorage.getItem('userFarmId')) || 1;
       const res = await fetch('/api/users/reset-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
-          'X-User-Role': myRole
+          'X-User-Role': myRole,
+          'X-Farm-Id': String(activeFarmId)
         },
         body: JSON.stringify({
           userId: resetModalUser.Id,
@@ -313,11 +336,13 @@ export const UserAccessManager: React.FC = () => {
     }
 
     try {
+      const activeFarmId = currentFarm?.Id || Number(localStorage.getItem('userFarmId')) || 1;
       const res = await fetch(`/api/users/${user.Id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
-          'X-User-Role': myRole
+          'X-User-Role': myRole,
+          'X-Farm-Id': String(activeFarmId)
         }
       });
       if (!res.ok) {
@@ -332,11 +357,17 @@ export const UserAccessManager: React.FC = () => {
   };
 
   // Filtered users list
+  const activeFarmId = currentFarm?.Id || Number(localStorage.getItem('userFarmId')) || 1;
   const filteredUsers = users.filter(u => {
     const matchesSearch =
       u.Username.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.FullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.Email.toLowerCase().includes(searchQuery.toLowerCase());
+
+    if (myRole !== 'Developer') {
+      // Farm Admin only sees users of their own farm, excluding Developer
+      return matchesSearch && u.Role !== 'Developer' && Number(u.FarmId || 1) === activeFarmId;
+    }
 
     const matchesFarm =
       farmFilter === 'all' ||
@@ -355,10 +386,14 @@ export const UserAccessManager: React.FC = () => {
               <Key className="w-5 h-5" />
             </span>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight">
-              User Access & Passwords
+              {myRole === 'Developer' ? 'User Access & Passwords' : 'ऑपरेटर व कर्मचारी व्यवस्थापन (Farm Operators)'}
             </h1>
-            <span className="text-[10px] bg-amber-50 text-amber-700 font-mono font-bold px-2 py-0.5 rounded-full border border-amber-200">
-              Developer SuperAdmin
+            <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+              myRole === 'Developer' 
+                ? 'bg-amber-50 text-amber-700 border-amber-200' 
+                : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+            }`}>
+              {myRole === 'Developer' ? 'Developer SuperAdmin' : 'Farm Administrator'}
             </span>
             <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-50 text-emerald-700 font-medium px-2 py-0.5 rounded-full border border-emerald-200">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -366,7 +401,9 @@ export const UserAccessManager: React.FC = () => {
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Centralized operator credentials management powered dynamically by Supabase Cloud. Inspect farm accounts, reveal security keys, and reset passwords.
+            {myRole === 'Developer'
+              ? 'Centralized operator credentials management powered dynamically by Supabase Cloud. Inspect farm accounts, reveal security keys, and reset passwords.'
+              : `${currentFarm?.FarmName || 'आपल्या फार्म'}मधील कर्मचाऱ्यांना (Operators) जोडणे, पासवर्ड नियंत्रित करणे व विशिष्ट कामांचे अधिकार (Permissions) देणे.`}
           </p>
         </div>
 
@@ -386,7 +423,7 @@ export const UserAccessManager: React.FC = () => {
             id="btn-add-operator"
           >
             <UserPlus className="w-4 h-4" />
-            Add New Operator
+            {myRole === 'Developer' ? 'Add New Operator' : 'नवीन ऑपरेटर जोडा (Add Operator)'}
           </button>
         </div>
       </div>
@@ -411,36 +448,54 @@ export const UserAccessManager: React.FC = () => {
       {/* Metric Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Accounts</span>
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            {myRole === 'Developer' ? 'Total Accounts' : 'फार्म कर्मचारी संख्या'}
+          </span>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-800">{users.length}</span>
+            <span className="text-2xl font-bold text-slate-800">
+              {myRole === 'Developer' ? users.length : filteredUsers.length}
+            </span>
             <span className="text-xs text-slate-500">Registered</span>
           </div>
         </div>
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Active Operators</span>
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            {myRole === 'Developer' ? 'Active Operators' : 'सक्रिय कर्मचारी'}
+          </span>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-bold text-emerald-700">
-              {users.filter(u => Boolean(u.IsActive)).length}
+              {(myRole === 'Developer' ? users : filteredUsers).filter(u => Boolean(u.IsActive)).length}
             </span>
             <span className="text-xs text-emerald-600 font-medium">Ready</span>
           </div>
         </div>
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tenant Farms</span>
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            {myRole === 'Developer' ? 'Tenant Farms' : 'सक्रिय फार्म युनिट'}
+          </span>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-800">{farms.length || 1}</span>
-            <span className="text-xs text-slate-500">Multi-Unit</span>
+            <span className="text-xl font-bold text-slate-800 truncate">
+              {myRole === 'Developer' ? (farms.length || 1) : (currentFarm?.FarmName || 'Farm #1')}
+            </span>
+            <span className="text-xs text-slate-500">
+              {myRole === 'Developer' ? 'Multi-Unit' : `Unit #${currentFarm?.Id || 1}`}
+            </span>
           </div>
         </div>
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">SuperAdmin Privilege</span>
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            {myRole === 'Developer' ? 'SuperAdmin Privilege' : 'तुमची भूमिका'}
+          </span>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-sm font-bold text-indigo-700">Developer Role</span>
-            <span className="text-[10px] text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md">Full Control</span>
+            <span className="text-sm font-bold text-indigo-700">
+              {myRole === 'Developer' ? 'Developer Role' : 'Farm Administrator'}
+            </span>
+            <span className="text-[10px] text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md">
+              {myRole === 'Developer' ? 'Full Control' : 'Operator Control'}
+            </span>
           </div>
         </div>
       </div>
@@ -459,19 +514,28 @@ export const UserAccessManager: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
-          <span className="text-xs text-slate-500 shrink-0">Filter by Farm:</span>
-          <select
-            value={farmFilter}
-            onChange={(e) => setFarmFilter(e.target.value)}
-            className="w-full sm:w-auto px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-          >
-            <option value="all">All Farms</option>
-            {farms.map(f => (
-              <option key={f.Id} value={String(f.Id)}>
-                #{f.Id} - {f.FarmName}
-              </option>
-            ))}
-          </select>
+          {myRole === 'Developer' ? (
+            <>
+              <span className="text-xs text-slate-500 shrink-0">Filter by Farm:</span>
+              <select
+                value={farmFilter}
+                onChange={(e) => setFarmFilter(e.target.value)}
+                className="w-full sm:w-auto px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              >
+                <option value="all">All Farms</option>
+                {farms.map(f => (
+                  <option key={f.Id} value={String(f.Id)}>
+                    #{f.Id} - {f.FarmName}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800">
+              <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>फार्म: {currentFarm?.FarmName || `Farm #${currentFarm?.Id || 1}`}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -742,22 +806,37 @@ export const UserAccessManager: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Assigned Farm Unit <span className="text-rose-500">*</span>
-                </label>
-                <select
-                  value={modalForm.FarmId}
-                  onChange={(e) => setModalForm({ ...modalForm, FarmId: Number(e.target.value) })}
-                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                >
-                  {farms.map(f => (
-                    <option key={f.Id} value={f.Id}>
-                      #{f.Id} - {f.FarmName}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {myRole === 'Developer' ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Assigned Farm Unit <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={modalForm.FarmId}
+                    onChange={(e) => setModalForm({ ...modalForm, FarmId: Number(e.target.value) })}
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    {farms.map(f => (
+                      <option key={f.Id} value={f.Id}>
+                        #{f.Id} - {f.FarmName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                  <span className="block text-xs font-bold text-slate-700 mb-0.5">
+                    संलग्न फार्म (Assigned Farm)
+                  </span>
+                  <div className="text-xs text-slate-800 font-semibold flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>{currentFarm?.FarmName || `Farm #${currentFarm?.Id || 1}`}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    हा ऑपरेटर आपोआप तुमच्या फार्मशी संलग्न राहील.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
