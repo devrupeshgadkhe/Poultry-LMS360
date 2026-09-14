@@ -15,22 +15,7 @@ import {
 } from 'lucide-react';
 import { Language, translations } from '../translations';
 
-const bulkImportTranslations: Record<Language, {
-  title: string;
-  sub: string;
-  step1: string;
-  step2: string;
-  schemaFields: string;
-  downloadBtn: string;
-  uploadBtn: string;
-  selectDropFile: string;
-  dropEncoding: string;
-  parsingText: string;
-  commitBtn: string;
-  validationResults: string;
-  readyToSync: string;
-  validRowsText: string;
-}> = {
+const bulkImportTranslations: Record<Language, any> = {
   en: {
     title: 'Bulk Ledger Data Import Node',
     sub: 'Accelerate system populating times with high-throughput CSV spreadsheet templates. Includes active duplicate checking and dependency parsing.',
@@ -47,86 +32,6 @@ const bulkImportTranslations: Record<Language, {
     readyToSync: 'File contains valid schema. Click Commit to load into database.',
     validRowsText: 'Ready to import'
   },
-  hi: {
-    title: 'बल्क डेटा आयात नोड',
-    sub: 'उच्च मात्रा वाले सीएसवी स्प्रेडशीट प्रारूपों के साथ डेटा भरने की प्रक्रिया को गति दें।',
-    step1: '1. नमूना स्प्रेडशीट टेम्पलेट डाउनलोड करें',
-    step2: '2. तैयार सीएसवी स्प्रेडशीट अपलोड करें',
-    schemaFields: 'आवश्यक फ़ील्ड्स सूची (Required Fields)',
-    downloadBtn: 'टेम्पलेट डाउनलोड करें (Download CSV)',
-    uploadBtn: 'सीएसवी फ़ाइल चुनें',
-    selectDropFile: 'सीएसवी फ़ाइल चुनें या यहाँ खींचें',
-    dropEncoding: 'यूटीएफ-8 एन्कोडिंग वाली सीएसवी फ़ाइलों का समर्थन करता है। ब्राउज़ करने के लिए क्लिक करें।',
-    parsingText: 'संख्यात्मक और सीमा आकलन चल रहा है...',
-    commitBtn: 'डेटाबेस में लेज़र प्रविष्टियाँ सहेजें',
-    validationResults: 'सत्यापन और त्रुटि विश्लेषण परिणाम',
-    readyToSync: 'सभी प्रविष्टियाँ सही हैं। आयात करने के लिए सहेजें बटन दबाएं।',
-    validRowsText: 'आयात के लिए तैयार'
-  },
-  mr: {
-    title: 'बल्क डेटा आयात नोड',
-    sub: 'उच्च-थ्रूपुट सीएसवी स्प्रेडशीट टेम्पलेटसह सिस्टीम पॉप्युलेटिंग प्रक्रियेस गती द्या.',
-    step1: '1. नमुना स्प्रेडशीट टेम्पलेट डाउनलोड करा',
-    step2: '2. पूर्ण केलेली सीएसव्ही स्प्रेडशीट अपलोड करा',
-    schemaFields: 'आवश्यक फील्ड सूची',
-    downloadBtn: 'टेम्पलेट डाउनलोड करा (CSV)',
-    uploadBtn: 'सीएसव्ही फाइल अपलोड करा',
-    selectDropFile: 'फाइल निवडा किंवा येथे ड्रॅग करा',
-    dropEncoding: 'यूटीएफ-8 एन्कोडिंगसह सीएसव्ही फायलींचे समर्थन करते. ब्राउझ करण्यासाठी क्लिक करा.',
-    parsingText: 'हिशोब मोजणी प्रक्रिया चालू आहे...',
-    commitBtn: 'डेटाबेसमध्ये नोंदी जतन करा',
-    validationResults: 'तपासणी आणि सत्यापन परिणाम',
-    readyToSync: 'फाइल डेटाबेसमध्ये जतन करण्यासाठी तयार आहे.',
-    validRowsText: 'आयात करण्यासाठी तयार'
-  },
-  gu: {
-    title: 'સામૂહિક ડેટા આયાત પત્રક',
-    sub: 'ઝડપી સીએસવી ટેમ્પલેટ ફાઇલો દ્વારા સિસ્ટમ ડેટા એન્ટ્રી પ્રક્રિયા સક્ષમ કરો.',
-    step1: '1. સેમ્પલ ટેમ્પલેટ શીટ ડાઉનલોડ કરો',
-    step2: '2. મેળવેલ સીએસવી ફાઇલ અપલોડ કરો',
-    schemaFields: 'આવશ્યક કોલમ હેડર્સ',
-    downloadBtn: 'ટેમ્પલેટ ડાઉનલોડ (CSV)',
-    uploadBtn: 'ફાઇલ સિલેક્ટ કરો (CSV)',
-    selectDropFile: 'ફાઇલ સિલેક્ટ કરો અથવા અંહી મુકો',
-    dropEncoding: 'યુટીએફ-૮ કોડેડ ફાઇલો સ્વીકાર્ય. બ્રાઉઝ કરવા ક્લિક કરો.',
-    parsingText: 'ચકાસણી પ્રક્રિયા ચાલુ છે...',
-    commitBtn: 'ડેટાબેઝમાં એન્ટ્રી સેવ કરો',
-    validationResults: 'પૃથક્કરણ અને ચકાસણી સારાંશ',
-    readyToSync: 'ડેટાબેઝમાં આયાત કરવા માટે તૈયાર છે.',
-    validRowsText: 'આયાત માટે મંજૂર'
-  },
-  te: {
-    title: 'డౌన్‌లోడ్ & బల్క్ డేటా ఇంపోర్టర్',
-    sub: 'భారీ డేటాను త్వరగా అప్‌లోడ్ చేయడానికి ఉపయోగపడే CSV ఫార్మాట్స్ సమాచారం.',
-    step1: '1. నమూనా స్ప్రెడ్‌షీట్ డౌన్‌లోడ్ చేసుకోండి',
-    step2: '2. పూర్తి చేసిన CSV ఫైల్ అప్‌లోడ్ చేయండి',
-    schemaFields: 'అవసరమైన కాలమ్స్ వివరాలు',
-    downloadBtn: 'CSV నమూనా డౌన్‌లోడ్',
-    uploadBtn: 'CSV ఫైల్ అప్‌లోడ్',
-    selectDropFile: 'ఫైల్ ఎంచుకోండి లేదా ఇక్కడ డ్రాప్ చేయండి',
-    dropEncoding: 'UTF-8 ఎన్‌కోడింగ్‌తో కూడిన CSV ఫైల్స్',
-    parsingText: 'విశ్లేషిస్తోంది... దయచేసి వేచి ఉండండి',
-    commitBtn: 'డేటాబేస్కు రికార్డులను సమర్పించు',
-    validationResults: 'ఫైల్ విశ్లేషణ మరియు ధృవీకరణ',
-    readyToSync: 'డేటాబేస్కు సమర్పించడానికి రికార్డులు సిద్ధంగా ఉన్నాయి.',
-    validRowsText: 'ఇంపోర్ట్ చేయడానికి సిద్ధంగా ఉంది'
-  },
-  bn: {
-    title: 'একত্রিত বাল্ক ডাটা ইম্পোর্ট নোড',
-    sub: 'উচ্চ ক্ষমতার CSV স্প্রেডশীট টেমপ্লেট দিয়ে সিস্টেম ড্যাটা ইনপুট প্রসেস দ্রুত করুন।',
-    step1: '1. নমুনা স্প্রেডশীট টেমপ্লেট ডাউনলোড করুন',
-    step2: '2. আপনার CSV স্প্রেডশীট আপলোড করুন',
-    schemaFields: 'প্রয়োজনীয় ফিল্ড কোডসমূহ',
-    downloadBtn: 'CSV টেমপ্লেট ডাউনলোড',
-    uploadBtn: 'CSV ফাইল সিলেক্ট করুন',
-    selectDropFile: 'ফাইল সিলেক্ট করুন বা ড্রপ করুন',
-    dropEncoding: 'ইউটিএফ-৮ ফরম্যাট সাপোর্টেড',
-    parsingText: 'যাচাই করা হচ্ছে... একটু অপেক্ষা করুন',
-    commitBtn: 'ডাটাবেজে তথ্য সংরক্ষণ করুন',
-    validationResults: 'ফাইল বিশ্লেষণ ও ভেরিফিকেশন ফলাফল',
-    readyToSync: 'ডাটাবেজে তথ্য ইম্পোর্ট করতে প্রস্তুত।',
-    validRowsText: 'ইম্পোর্ট করার জন্য তৈরি'
-  }
 };
 
 interface BulkImportProps {
@@ -451,7 +356,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
                   }}
                   className="text-red-500 hover:text-red-700 font-bold"
                 >
-                  {currentLanguage === 'hi' ? 'हटाएं' : currentLanguage === 'mr' ? 'काढा' : currentLanguage === 'gu' ? 'દૂર કરો' : currentLanguage === 'te' ? 'తొలగించు' : currentLanguage === 'bn' ? 'মুছে ফেলুন' : 'Remove'}
+                  Remove
                 </button>
               </div>
             )}
@@ -634,7 +539,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
                     }`}
                   >
                     {isCommiting ? (
-                      <>{currentLanguage === 'hi' ? 'सहेज रहा है...' : currentLanguage === 'mr' ? 'जतन करत आहे...' : currentLanguage === 'gu' ? 'સેવ થાય છે...' : currentLanguage === 'te' ? 'భద్రపరుస్తోంది...' : currentLanguage === 'bn' ? 'সংরक्षण করা হচ্ছে...' : 'Syncing...'}</>
+                      <>Syncing...</>
                     ) : (
                       <>
                         <ArrowRight className="h-4 w-4" />

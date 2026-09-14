@@ -193,7 +193,7 @@ export const SuperAdminConsole: React.FC = () => {
           }`}
         >
           <Database className="w-4 h-4" />
-          Legacy SQLite Migrator
+          Legacy Data Migrator
         </button>
       </div>
 
@@ -217,11 +217,11 @@ export const SuperAdminConsole: React.FC = () => {
           )}
           <div className="text-sm">
             <span className="font-semibold">
-              {connectionStatus.success ? 'Supabase PostgreSQL Cloud: Connected & Active' : 'Supabase Connection Warning'}
+              {connectionStatus.success ? 'Cloud Database: Connected & Active' : 'Cloud Database Connection Warning'}
             </span>
-            <p className="mt-0.5 text-xs opacity-90">{connectionStatus.message}</p>
+            <p className="mt-0.5 text-xs opacity-90">{connectionStatus.message?.replace(/Supabase/gi, 'Cloud Database')}</p>
             <p className="mt-1 text-[11px] font-mono text-slate-500">
-              Host: https://vrujjlytlbjezesupoxq.supabase.co | Active Tenants: {farms.length}
+              Database Sync: Active | Registered Farms: {farms.length}
             </p>
           </div>
         </div>
@@ -312,7 +312,7 @@ export const SuperAdminConsole: React.FC = () => {
           </div>
         ) : farms.length === 0 ? (
           <div className="p-12 text-center text-slate-500 text-sm">
-            No farms registered yet in Supabase. Click &quot;Add New Farm&quot; to provision the first client.
+            No farms registered yet. Click &quot;Add New Farm&quot; to provision the first client.
           </div>
         ) : (
           <div className="overflow-x-auto">

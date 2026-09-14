@@ -205,7 +205,7 @@ export default function LegacyMigrator({ userRole = 'Developer' }: { userRole?: 
               Legacy Single-Farm to Multi-Tenant Migrator
             </h1>
             <p className="text-sm text-slate-300 mt-1 max-w-3xl">
-              Seamlessly import historical SQLite databases or encrypted backup JSON from legacy desktop setups into
+              Seamlessly import historical database records or encrypted backup files from legacy desktop setups into
               isolated cloud tenant farms. Automatically injects <code className="text-indigo-300 font-mono">FarmId</code> and remaps relational keys.
             </p>
           </div>
@@ -348,7 +348,7 @@ export default function LegacyMigrator({ userRole = 'Developer' }: { userRole?: 
             </div>
             <h2 className="text-base font-bold text-slate-800">Upload Legacy Database / Backup</h2>
             <p className="text-xs text-slate-500 mt-1">
-              Supports SQLite files (<code className="text-indigo-600">.db</code>, <code className="text-indigo-600">.sqlite</code>) or Poultry LMS backup (<code className="text-indigo-600">.json</code>).
+              Supports database backup files (<code className="text-indigo-600">.db</code>, <code className="text-indigo-600">.sqlite</code>) or standard backup (<code className="text-indigo-600">.json</code>).
             </p>
 
             <div

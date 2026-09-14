@@ -101,7 +101,7 @@ export default function Dashboard({ currentLanguage, setCurrentLanguage }: Dashb
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold text-slate-500 font-sans flex items-center gap-1.5">
-              भाषा / Language:
+              Language:
               <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-extrabold tracking-wider uppercase bg-indigo-50 text-indigo-600 border border-indigo-150 animate-pulse select-none font-mono">
                 Beta
               </span>

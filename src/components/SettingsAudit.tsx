@@ -463,7 +463,7 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
             id="trigger-age-sync-btn"
           >
             <Activity className="h-4 w-4" />
-            {syncingAges ? 'Syncing...' : (currentLanguage === 'hi' ? 'जैविक रिकॉर्ड उम्र बढ़ना बलपूर्वक करें' : currentLanguage === 'mr' ? 'जैविक रेकॉर्ड वृद्धत्व सक्ती करा' : currentLanguage === 'gu' ? 'જૈવિક રેકોર્ડ વૃદ્ધત્વ દબાણ કરો' : currentLanguage === 'te' ? 'బయోలాజికల్ రికార్డ్స్ వృద్ధాప్యం బలవంతం చేయండి' : currentLanguage === 'bn' ? 'জৈবিক রেকর্ড বয়স বাড়ানো জোরপূর্বক করুন' : 'Force biological records aging')}
+            {syncingAges ? 'Syncing...' : 'Force biological records aging'}
           </button>
         </div>
       </div>

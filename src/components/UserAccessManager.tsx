@@ -150,12 +150,12 @@ export const UserAccessManager: React.FC = () => {
   const handleOpenEditModal = (user: UserAccount) => {
     if (myRole !== 'Developer') {
       if (user.Role === 'Developer') {
-        setAlertMsg({ type: 'error', text: 'सुरक्षा मर्यादा: फार्म ॲडमिनिस्ट्रेटर डेव्हलपर खात्यामध्ये बदल करू शकत नाहीत.' });
+        setAlertMsg({ type: 'error', text: 'Security Restriction: Farm Administrators cannot modify Developer accounts.' });
         return;
       }
       const currentUserName = localStorage.getItem('userName');
       if (user.Role === 'Admin' && user.Username !== currentUserName) {
-        setAlertMsg({ type: 'error', text: 'सुरक्षा मर्यादा: फार्म ॲडमिनिस्ट्रेटर इतर ॲडमिन खात्यामध्ये बदल करू शकत नाहीत.' });
+        setAlertMsg({ type: 'error', text: 'Security Restriction: Farm Administrators cannot modify other Admin accounts.' });
         return;
       }
     }
@@ -386,7 +386,7 @@ export const UserAccessManager: React.FC = () => {
               <Key className="w-5 h-5" />
             </span>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight">
-              {myRole === 'Developer' ? 'User Access & Passwords' : 'ऑपरेटर व कर्मचारी व्यवस्थापन (Farm Operators)'}
+              {myRole === 'Developer' ? 'User Access & Passwords' : 'Farm Operators & Staff Access'}
             </h1>
             <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
               myRole === 'Developer' 
@@ -397,13 +397,13 @@ export const UserAccessManager: React.FC = () => {
             </span>
             <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-50 text-emerald-700 font-medium px-2 py-0.5 rounded-full border border-emerald-200">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              Supabase Cloud Live
+              Cloud Database Active
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
             {myRole === 'Developer'
-              ? 'Centralized operator credentials management powered dynamically by Supabase Cloud. Inspect farm accounts, reveal security keys, and reset passwords.'
-              : `${currentFarm?.FarmName || 'आपल्या फार्म'}मधील कर्मचाऱ्यांना (Operators) जोडणे, पासवर्ड नियंत्रित करणे व विशिष्ट कामांचे अधिकार (Permissions) देणे.`}
+              ? 'Centralized operator credentials management. Inspect farm accounts, reveal security keys, and reset passwords.'
+              : `Manage staff operators, passwords, and task permissions for ${currentFarm?.FarmName || 'your farm'}.`}
           </p>
         </div>
 
@@ -411,8 +411,8 @@ export const UserAccessManager: React.FC = () => {
           <button
             onClick={() => { fetchUsers(); refreshFarms(); }}
             className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer"
-            title="Refresh Users and Farms from Supabase"
-            id="btn-refresh-supabase-users"
+            title="Refresh Users and Farms"
+            id="btn-refresh-users"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
@@ -423,7 +423,7 @@ export const UserAccessManager: React.FC = () => {
             id="btn-add-operator"
           >
             <UserPlus className="w-4 h-4" />
-            {myRole === 'Developer' ? 'Add New Operator' : 'नवीन ऑपरेटर जोडा (Add Operator)'}
+            Add New Operator
           </button>
         </div>
       </div>
@@ -449,7 +449,7 @@ export const UserAccessManager: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {myRole === 'Developer' ? 'Total Accounts' : 'फार्म कर्मचारी संख्या'}
+            {myRole === 'Developer' ? 'Total Accounts' : 'Farm Staff Members'}
           </span>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-bold text-slate-800">
@@ -461,7 +461,7 @@ export const UserAccessManager: React.FC = () => {
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {myRole === 'Developer' ? 'Active Operators' : 'सक्रिय कर्मचारी'}
+            {myRole === 'Developer' ? 'Active Operators' : 'Active Operators'}
           </span>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-bold text-emerald-700">
@@ -473,7 +473,7 @@ export const UserAccessManager: React.FC = () => {
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {myRole === 'Developer' ? 'Tenant Farms' : 'सक्रिय फार्म युनिट'}
+            {myRole === 'Developer' ? 'Tenant Farms' : 'Active Farm Unit'}
           </span>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-xl font-bold text-slate-800 truncate">
@@ -487,7 +487,7 @@ export const UserAccessManager: React.FC = () => {
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            {myRole === 'Developer' ? 'SuperAdmin Privilege' : 'तुमची भूमिका'}
+            {myRole === 'Developer' ? 'SuperAdmin Privilege' : 'Current Role'}
           </span>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-sm font-bold text-indigo-700">
@@ -533,7 +533,7 @@ export const UserAccessManager: React.FC = () => {
           ) : (
             <div className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800">
               <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>फार्म: {currentFarm?.FarmName || `Farm #${currentFarm?.Id || 1}`}</span>
+              <span>Farm: {currentFarm?.FarmName || `Farm #${currentFarm?.Id || 1}`}</span>
             </div>
           )}
         </div>
@@ -826,14 +826,14 @@ export const UserAccessManager: React.FC = () => {
               ) : (
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
                   <span className="block text-xs font-bold text-slate-700 mb-0.5">
-                    संलग्न फार्म (Assigned Farm)
+                    Assigned Farm
                   </span>
                   <div className="text-xs text-slate-800 font-semibold flex items-center gap-1.5">
                     <Building2 className="w-3.5 h-3.5 text-emerald-600" />
                     <span>{currentFarm?.FarmName || `Farm #${currentFarm?.Id || 1}`}</span>
                   </div>
                   <p className="text-[10px] text-slate-500 mt-1">
-                    हा ऑपरेटर आपोआप तुमच्या फार्मशी संलग्न राहील.
+                    This operator is automatically linked to your farm unit.
                   </p>
                 </div>
               )}

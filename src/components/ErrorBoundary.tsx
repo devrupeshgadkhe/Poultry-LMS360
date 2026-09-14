@@ -57,7 +57,7 @@ export default class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 selection:bg-rose-500 selection:text-white" id="react-crash-screen">
+        <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 selection:bg-rose-500 selection:text-white" id="app-crash-screen">
           <div className="w-full max-w-xl bg-white border border-slate-200 rounded-3xl p-8 space-y-6 shadow-xl relative overflow-hidden">
             <div className="absolute -top-32 -right-32 w-64 h-64 bg-rose-500/5 rounded-full blur-3xl"></div>
             
@@ -67,17 +67,17 @@ export default class ErrorBoundary extends Component<Props, State> {
               </div>
               <div>
                 <h1 className="text-xl sm:text-2xl font-bold font-display text-slate-900 tracking-tight">
-                  Application Runtime Exception
+                  Application Notice
                 </h1>
                 <p className="text-slate-500 text-xs sm:text-sm mt-0.5">
-                  An unhandled JavaScript crash has occurred in the UI interface.
+                  An unexpected error occurred while displaying the page.
                 </p>
               </div>
             </div>
 
             <div className="p-4 bg-slate-950 text-slate-200 border border-slate-800 rounded-2xl font-mono text-[11px] space-y-2 overflow-auto max-h-[220px]">
               <div className="text-rose-400 font-bold">
-                Exception: {this.state.error?.message || 'Unknown render exception'}
+                Error Details: {this.state.error?.message || 'Unknown system error'}
               </div>
               {this.state.error?.stack && (
                 <pre className="text-slate-400 leading-relaxed whitespace-pre-wrap font-mono">
@@ -87,9 +87,9 @@ export default class ErrorBoundary extends Component<Props, State> {
             </div>
 
             <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl text-amber-800 text-[11px] leading-relaxed flex gap-2">
-              <span className="font-bold shrink-0">DEVELOPER NOTE:</span>
+              <span className="font-bold shrink-0">SYSTEM NOTICE:</span>
               <span>
-                This failure has been automatically dispatched and registered in the developer error log audit trail. You can safely inspect and debug this exception from the <b>Developer SQL CLI / Error Logger Console</b>.
+                This error has been logged automatically to the system audit trail. Please reload the application or contact support if the issue persists.
               </span>
             </div>
 

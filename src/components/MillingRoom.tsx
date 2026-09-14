@@ -28,132 +28,7 @@ interface RecipeLineItem {
 }
 
 // Multilingual labels for ultra-clear and farmer-friendly UX
-const millingText: Record<Language, {
-  tabProduce: string;
-  tabRecipes: string;
-  tabHistory: string;
-  quickProduceTitle: string;
-  quickProduceSub: string;
-  selectRecipe: string;
-  chooseRecipePlaceholder: string;
-  batchQtyKg: string;
-  batchQtyBags: string;
-  bagsNote: string;
-  liveStockTitle: string;
-  ingredient: string;
-  formulaPct: string;
-  requiredQty: string;
-  availableStock: string;
-  stockStatus: string;
-  sufficient: string;
-  shortage: string;
-  unitCost: string;
-  lineCost: string;
-  estTotalCost: string;
-  costPerKg: string;
-  costPerBag: string;
-  targetFeedNotice: string;
-  produceBtn: string;
-  producing: string;
-  newFormulaBtn: string;
-  formulaTemplates: string;
-  templateLayer: string;
-  templateStarter: string;
-  templateFinisher: string;
-  templateGrower: string;
-  formulaName: string;
-  formulaNamePlaceholder: string;
-  targetFeedOptAuto: string;
-  targetFeedOptSelect: string;
-  targetFeedSelectPlaceholder: string;
-  notesLabel: string;
-  notesPlaceholder: string;
-  ingredientsSection: string;
-  addIngredientBtn: string;
-  chooseIngredientPlaceholder: string;
-  pctLabel: string;
-  balanceLabel: string;
-  balanceOk: string;
-  balanceNotOk: string;
-  saveFormulaBtn: string;
-  cancelBtn: string;
-  historyTitle: string;
-  historySub: string;
-  milledDate: string;
-  batchRecipe: string;
-  outputProduct: string;
-  totalProduced: string;
-  totalCostLabel: string;
-  statusLabel: string;
-  storedInStock: string;
-  noRecipesYet: string;
-  createFirstRecipe: string;
-  produceNowBtn: string;
-  autoInventoryNotice: string;
-}> = {
-  mr: {
-    tabProduce: '🥣 थेट खाद्य उत्पादन (Produce)',
-    tabRecipes: '📋 खाद्य फॉर्म्युले (Recipes)',
-    tabHistory: '📜 उत्पादन नोंदवही (Logs)',
-    quickProduceTitle: 'खाद्य तयार करा व गोदामात जमा करा',
-    quickProduceSub: 'फॉर्म्युला निवडा, गोणी किंवा वजन टाका; कच्चा माल आपोआप वजा होईल आणि तयार खाद्य साठ्यात जमा होईल.',
-    selectRecipe: 'खाद्य फॉर्म्युला निवडा:',
-    chooseRecipePlaceholder: '-- फॉर्म्युला निवडा --',
-    batchQtyKg: 'एकूण उत्पादन वजन (किलो / Kg):',
-    batchQtyBags: 'किंवा गोणी संख्या (५० किलो गोणी):',
-    bagsNote: '१ गोणी = ५० किलो प्रमाणे स्वयंचलित गणना',
-    liveStockTitle: 'कच्च्या मालाची थेट उपलब्धता व खर्च तपासणी:',
-    ingredient: 'कच्चा माल',
-    formulaPct: 'प्रमाण (%)',
-    requiredQty: 'आवश्यक वजन',
-    availableStock: 'गोदामात शिल्लक',
-    stockStatus: 'उपलब्धता स्थिती',
-    sufficient: 'पर्याप्त साठा उपलब्ध',
-    shortage: 'कमी पडत आहे',
-    unitCost: 'खरेदी दर',
-    lineCost: 'एकूण खर्च',
-    estTotalCost: 'एकूण बॅच खर्च:',
-    costPerKg: 'प्रति किलो खर्च:',
-    costPerBag: 'प्रति गोणी (५० किलो):',
-    targetFeedNotice: 'हे तयार झालेले खाद्य थेट गोदामात या नावाने साठवले जाईल:',
-    produceBtn: '🥣 खाद्य तयार करा व गोदामात जमा करा',
-    producing: 'खाद्य तयार होत आहे...',
-    newFormulaBtn: '+ नवीन फॉर्म्युला तयार करा',
-    formulaTemplates: 'तयार फॉर्म्युला नमुने (१-क्लिकवर निवडा):',
-    templateLayer: '🌾 लेअर खाद्य (Layer Mash)',
-    templateStarter: '🐥 ब्रॉयलर स्टार्टर (Starter)',
-    templateFinisher: '🐔 ब्रॉयलर फिनिशर (Finisher)',
-    templateGrower: '🌱 ग्रोव्हर खाद्य (Grower)',
-    formulaName: 'फॉर्म्युला नाव:',
-    formulaNamePlaceholder: 'उदा. लेअर खाद्य - फेज १ / ब्रॉयलर स्टार्टर',
-    targetFeedOptAuto: 'गोदाम साठ्यात याच नावाने तयार खाद्य आयटम आपोआप बनवा (शिफारस)',
-    targetFeedOptSelect: 'किंवा गोदामातील अस्तित्वात असलेला आयटम जोडा',
-    targetFeedSelectPlaceholder: '-- गोदामातील खाद्य आयटम निवडा --',
-    notesLabel: 'टीप किंवा पोषण माहिती (पर्यायी):',
-    notesPlaceholder: 'उदा. १६% प्रोटीन, मका आणि सोया डीओसी मिश्रण...',
-    ingredientsSection: 'कच्च्या मालाचे घटक व टक्केवारी (%):',
-    addIngredientBtn: '+ घटक जोडा',
-    chooseIngredientPlaceholder: '-- कच्चा माल निवडा --',
-    pctLabel: 'टक्केवारी (%)',
-    balanceLabel: 'एकूण टक्केवारी प्रमाण:',
-    balanceOk: '१००% पूर्ण (अचूक बॅलन्स)',
-    balanceNotOk: 'एकूण प्रमाण १००% असावे',
-    saveFormulaBtn: 'फॉर्म्युला सेव्ह करा',
-    cancelBtn: 'रद्द करा',
-    historyTitle: 'फीड मिलिंग उत्पादन इतिहास',
-    historySub: 'फार्मवर तयार केलेल्या सर्व खाद्य बॅचेसचा दिनांकनिहाय तपशील व प्रति किलो खर्च.',
-    milledDate: 'तारीख व वेळ',
-    batchRecipe: 'वापरलेला फॉर्म्युला',
-    outputProduct: 'तयार खाद्य उत्पादन',
-    totalProduced: 'तयार उत्पादन',
-    totalCostLabel: 'एकूण खर्च व दर',
-    statusLabel: 'स्थिती',
-    storedInStock: 'गोदामात जमा',
-    noRecipesYet: 'अजून कोणताही खाद्य फॉर्म्युला तयार केलेला नाही.',
-    createFirstRecipe: 'नवीन फॉर्म्युला तयार करण्यासाठी येथे क्लिक करा',
-    produceNowBtn: '🥣 आता बनवा',
-    autoInventoryNotice: 'महत्त्वाचे: तुम्हाला गोदामात (Warehouse) जाऊन स्वतंत्र आयटम बनवण्याची गरज नाही! सिस्टीम आपोआप तयार खाद्य आयटम गोदामात रजिस्टर करेल.'
-  },
+const millingText: Record<Language, any> = {
   en: {
     tabProduce: '🥣 Produce Feed',
     tabRecipes: '📋 Feed Recipes',
@@ -217,261 +92,9 @@ const millingText: Record<Language, {
     produceNowBtn: '🥣 Produce Now',
     autoInventoryNotice: 'Zero friction: No need to pre-create items in Warehouse. The system automatically creates finished feed in your stock.'
   },
-  hi: {
-    tabProduce: '🥣 दाना उत्पादन (Produce)',
-    tabRecipes: '📋 दाना फॉर्मूला (Recipes)',
-    tabHistory: '📜 उत्पादन लॉग (Logs)',
-    quickProduceTitle: 'मुर्गी दाना तैयार करें और स्टॉक में जमा करें',
-    quickProduceSub: 'फॉर्मूला चुनें और मात्रा दर्ज करें; कच्चा माल कट जाएगा और तैयार दाना गोदाम में जुड़ जाएगा।',
-    selectRecipe: 'दाना फॉर्मूला चुनें:',
-    chooseRecipePlaceholder: '-- फॉर्मूला चुनें --',
-    batchQtyKg: 'कुल उत्पादन वजन (किलो / Kg):',
-    batchQtyBags: 'या बोरी संख्या (५० किलो बोरी):',
-    bagsNote: '१ बोरी = ५० किलो के हिसाब से गणना',
-    liveStockTitle: 'कच्चे माल की उपलब्धता और लागत जांच:',
-    ingredient: 'कच्चा माल',
-    formulaPct: 'अनुपात (%)',
-    requiredQty: 'जरूरी वजन',
-    availableStock: 'गोदाम में उपलब्ध',
-    stockStatus: 'उपलब्धता स्थिति',
-    sufficient: 'पर्याप्त स्टॉक उपलब्ध',
-    shortage: 'कमी है',
-    unitCost: 'लागत दर',
-    lineCost: 'कुल लागत',
-    estTotalCost: 'कुल बैच लागत:',
-    costPerKg: 'प्रति किलो लागत:',
-    costPerBag: 'प्रति बोरी (५० किलो):',
-    targetFeedNotice: 'तैयार दाना गोदाम में इस नाम से स्वतः जमा होगा:',
-    produceBtn: '🥣 दाना तैयार करें और स्टॉक में जोड़ें',
-    producing: 'दाना तैयार हो रहा है...',
-    newFormulaBtn: '+ नया फॉर्मूला बनाएं',
-    formulaTemplates: 'तैयार फॉर्मूला नमूने (१-क्लिक):',
-    templateLayer: '🌾 लेयर दाना (Layer Mash)',
-    templateStarter: '🐥 ब्रॉयलर स्टार्टर (Starter)',
-    templateFinisher: '🐔 ब्रॉयलर फिनिशर (Finisher)',
-    templateGrower: '🌱 ग्रोवर दाना (Grower)',
-    formulaName: 'फॉर्मूला नाम:',
-    formulaNamePlaceholder: 'उदा. लेयर मैश - फेज १ / ब्रॉयलर स्टार्टर',
-    targetFeedOptAuto: 'गोदाम में इसी नाम से तैयार दाना अपने-आप बनाएं (अनुशंसित)',
-    targetFeedOptSelect: 'या पहले से मौजूद दाना आइटम से जोड़ें',
-    targetFeedSelectPlaceholder: '-- गोदाम का दाना चुनें --',
-    notesLabel: 'नोट्स / पोषण जानकारी (वैकल्पिक):',
-    notesPlaceholder: 'उदा. १६% प्रोटीन मक्का और सोया डीओसी मिश्रण...',
-    ingredientsSection: 'कच्चे माल के घटक और प्रतिशत (%):',
-    addIngredientBtn: '+ घटक जोड़ें',
-    chooseIngredientPlaceholder: '-- कच्चा माल चुनें --',
-    pctLabel: 'प्रतिशत (%)',
-    balanceLabel: 'कुल प्रतिशत अनुपात:',
-    balanceOk: '१००% पूर्ण (संतुलित)',
-    balanceNotOk: 'कुल योग १००% होना चाहिए',
-    saveFormulaBtn: 'फॉर्मूला सुरक्षित करें',
-    cancelBtn: 'रद्द करें',
-    historyTitle: 'दाना उत्पादन इतिहास',
-    historySub: 'तैयार किए गए सभी दाना बैचों का विवरण और प्रति किलो लागत।',
-    milledDate: 'दिनांक और समय',
-    batchRecipe: 'फॉर्मूला',
-    outputProduct: 'तैयार दाना उत्पाद',
-    totalProduced: 'कुल उत्पादन',
-    totalCostLabel: 'कुल लागत व दर',
-    statusLabel: 'स्थिति',
-    storedInStock: 'स्टॉक में जमा',
-    noRecipesYet: 'इस फार्म के लिए कोई फॉर्मूला उपलब्ध नहीं है।',
-    createFirstRecipe: 'पहला फॉर्मूला बनाने के लिए यहाँ क्लिक करें',
-    produceNowBtn: '🥣 अभी बनाएं',
-    autoInventoryNotice: 'शून्य झंझट: गोदाम में पहले से आइटम बनाने की जरूरत नहीं है। सिस्टम अपने-आप आइटम बना देगा।'
-  },
-  gu: {
-    tabProduce: '🥣 ખોરાક ઉત્પાદન (Produce)',
-    tabRecipes: '📋 ખોરાક ફોર્મ્યુલા (Recipes)',
-    tabHistory: '📜 ઉત્પાદન હિસાબ (Logs)',
-    quickProduceTitle: 'મરઘી ખોરાક તૈયાર કરો અને સ્ટોકમાં જમા કરો',
-    quickProduceSub: 'ફોર્મ્યુલા પસંદ કરો અને વજન દાખલ કરો; રો-મટીરીયલ આપોઆપ કપાશે અને તૈયાર ખોરાક સ્ટોકમાં જમા થશે.',
-    selectRecipe: 'ખોરાક ફોર્મ્યુલા પસંદ કરો:',
-    chooseRecipePlaceholder: '-- ફોર્મ્યુલા પસંદ કરો --',
-    batchQtyKg: 'કુલ ઉત્પાદન વજન (કિલો / Kg):',
-    batchQtyBags: 'અથવા ગુણી સંખ્યા (૫૦ કિલો ગુણી):',
-    bagsNote: '૧ ગુણી = ૫૦ કિલો મુજબ ગણતરી',
-    liveStockTitle: 'કાચો માલ ઉપલબ્ધતા અને ખર્ચ તપાસ:',
-    ingredient: 'કાચો માલ',
-    formulaPct: 'પ્રમાણ (%)',
-    requiredQty: 'જરૂરી વજન',
-    availableStock: 'ગોડાઉનમાં ઉપલબ્ધ',
-    stockStatus: 'સ્થિતિ',
-    sufficient: 'પૂરતો સ્ટોક ઉપલબ્ધ',
-    shortage: 'ઓછો પડી રહ્યો છે',
-    unitCost: 'ખરીદી ભાવ',
-    lineCost: 'કુલ ખર્ચ',
-    estTotalCost: 'કુલ બેચ ખર્ચ:',
-    costPerKg: 'પ્રતિ કિલો ખર્ચ:',
-    costPerBag: 'પ્રતિ ૫૦ કિલો ગુણી:',
-    targetFeedNotice: 'તૈયાર થયેલ ખોરાક ગોડાઉનમાં આ નામે જમા થશે:',
-    produceBtn: '🥣 ખોરાક મિક્સ કરો અને સ્ટોક વધારો',
-    producing: 'તૈયાર થઈ રહ્યું છે...',
-    newFormulaBtn: '+ નવો ફોર્મ્યુલા બનાવો',
-    formulaTemplates: 'તૈયાર ફોર્મ્યુલા નમૂના:',
-    templateLayer: '🌾 લેયર ખોરાક',
-    templateStarter: '🐥 બ્રોયલર સ્ટાર્ટર',
-    templateFinisher: '🐔 બ્રોયલર ફિનિશર',
-    templateGrower: '🌱 ગ્રોવર ખોરાક',
-    formulaName: 'ફોર્મ્યુલા નામ:',
-    formulaNamePlaceholder: 'દા.ત. લેયર મેશ - ફેઝ ૧',
-    targetFeedOptAuto: 'ગોડાઉન સ્ટોકમાં આપોઆપ આ નામથી આઈટમ બનાવો',
-    targetFeedOptSelect: 'અથવા અગાઉની આઈટમ લિંક કરો',
-    targetFeedSelectPlaceholder: '-- ગોડાઉન આઈટમ પસંદ કરો --',
-    notesLabel: 'વિગત:',
-    notesPlaceholder: 'પોષણ માહિતી...',
-    ingredientsSection: 'કાચા માલના ઘટકો અને ટકાવારી (%):',
-    addIngredientBtn: '+ ઘટક ઉમેરો',
-    chooseIngredientPlaceholder: '-- કાચો માલ પસંદ કરો --',
-    pctLabel: 'ટકા (%)',
-    balanceLabel: 'કુલ ટકાવારી:',
-    balanceOk: '૧૦૦% સંતુલિત',
-    balanceNotOk: 'સરવાળો ૧૦૦% થવો જોઈએ',
-    saveFormulaBtn: 'સેવ કરો',
-    cancelBtn: 'રદ કરો',
-    historyTitle: 'ઉત્પાદન ઇતિહાસ',
-    historySub: 'બનાવેલ ખોરાક બેચનું વિવરણ.',
-    milledDate: 'તારીખ',
-    batchRecipe: 'ફોર્મ્યુલા',
-    outputProduct: 'તૈયાર પ્રોડક્ટ',
-    totalProduced: 'ઉત્પાદન',
-    totalCostLabel: 'ખર્ચ',
-    statusLabel: 'સ્થિતિ',
-    storedInStock: 'સ્ટોકમાં જમા',
-    noRecipesYet: 'કોઈ ફોર્મ્યુલા મળ્યો નથી.',
-    createFirstRecipe: 'પ્રથમ ફોર્મ્યુલા બનાવવા અહીં ક્લિક કરો',
-    produceNowBtn: '🥣 હવે બનાવો',
-    autoInventoryNotice: 'સરળ પદ્ધતિ: ગોડાઉનમાં અગાઉથી આઈટમ બનાવવાની જરૂર નથી.'
-  },
-  te: {
-    tabProduce: '🥣 మేత తయారీ (Produce)',
-    tabRecipes: '📋 మేత ఫార్ములాలు (Recipes)',
-    tabHistory: '📜 ఉత్పత్తి రికార్డులు (Logs)',
-    quickProduceTitle: 'కోళ్ళ మేత తయారీ మరియు స్టాక్ నమోదు',
-    quickProduceSub: 'ఫార్ములా ఎంచుకోండి, బ్యాచ్ సైజ్ నమోదు చేయండి; రా మెటీరియల్ తగ్గింపు మరియు తుది మేత స్టాక్‌లో కలుస్తుంది.',
-    selectRecipe: 'మేత ఫార్ములా ఎంచుకోండి:',
-    chooseRecipePlaceholder: '-- ఫార్ములా ఎంచుకోండి --',
-    batchQtyKg: 'మొత్తం బరువు (కేజీలు / Kg):',
-    batchQtyBags: 'లేదా సంచుల సంఖ్య (50 కేజీల బస్తా):',
-    bagsNote: '1 బస్తా = 50 కేజీలు',
-    liveStockTitle: 'రా మెటీరియల్ లభ్యత మరియు ఖర్చుల జాబితా:',
-    ingredient: 'ముడి సరుకు',
-    formulaPct: 'నిష్పత్తి (%)',
-    requiredQty: 'కావలసిన బరువు',
-    availableStock: 'గోదాములో ఉన్నది',
-    stockStatus: 'లభ్యత',
-    sufficient: 'సరిపడా ఉంది',
-    shortage: 'తక్కువగా ఉంది',
-    unitCost: 'యూనిట్ ధర',
-    lineCost: 'మొత్తం ఖర్చు',
-    estTotalCost: 'మొత్తం బ్యాచ్ ఖర్చు:',
-    costPerKg: 'కేజీ ఖర్చు:',
-    costPerBag: 'బస్తా ఖర్చు:',
-    targetFeedNotice: 'తయారైన మేత నేరుగా గోదాములో ఈ పేరుతో నిల్వ చేయబడుతుంది:',
-    produceBtn: '🥣 మేత తయారు చేసి గోదాములో చేర్చండి',
-    producing: 'మేత తయారవుతోంది...',
-    newFormulaBtn: '+ కొత్త ఫార్ములా',
-    formulaTemplates: 'రెడీమేడ్ ఫార్ములాలు:',
-    templateLayer: '🌾 లేయర్ మేత',
-    templateStarter: '🐥 బ్రాయిలర్ స్టార్టర్',
-    templateFinisher: '🐔 బ్రాయిలర్ ఫినిషర్',
-    templateGrower: '🌱 గ్రోవర్ మేత',
-    formulaName: 'ఫార్ములా పేరు:',
-    formulaNamePlaceholder: 'ఉదా. లేయర్ మేష్ - ఫేజ్ 1',
-    targetFeedOptAuto: 'గోదాము స్టాక్‌లో స్వయంచాలకంగా ఈ పేరుతో ఫీడ్ ఐటమ్‌ను సృష్టించండి',
-    targetFeedOptSelect: 'లేదా ఇప్పటికే ఉన్న ఐటమ్‌ను లింక్ చేయండి',
-    targetFeedSelectPlaceholder: '-- ఐటమ్ ఎంచుకోండి --',
-    notesLabel: 'వివరాలు:',
-    notesPlaceholder: 'పోషకాహార సమాచారం...',
-    ingredientsSection: 'దినుసులు మరియు శాతం (%):',
-    addIngredientBtn: '+ దినుసు జోడించండి',
-    chooseIngredientPlaceholder: '-- దినుసు ఎంచుకోండి --',
-    pctLabel: 'శాతం (%)',
-    balanceLabel: 'మొత్తం నిష్పత్తి:',
-    balanceOk: '100% సరిపోయింది',
-    balanceNotOk: 'మొత్తం 100% ఉండాలి',
-    saveFormulaBtn: 'సేవ్ చేయండి',
-    cancelBtn: 'రద్దు చేయండి',
-    historyTitle: 'ఉత్పత్తి చరిత్ర',
-    historySub: 'తయారు చేసిన మేత బ్యాచ్‌ల రికార్డులు.',
-    milledDate: 'తేదీ',
-    batchRecipe: 'ఫార్ములా',
-    outputProduct: 'తుది మేత',
-    totalProduced: 'పరిమాణం',
-    totalCostLabel: 'ఖర్చు',
-    statusLabel: 'స్థితి',
-    storedInStock: 'గోదాములో చేరింది',
-    noRecipesYet: 'ఫార్ములాలు లేవు.',
-    createFirstRecipe: 'మొదటి ఫార్ములా తయారు చేయండి',
-    produceNowBtn: '🥣 తయారు చేయండి',
-    autoInventoryNotice: 'సులభమైన విధానం: ముందే గోదాములో నమోదు చేయవలసిన పనిలేదు.'
-  },
-  bn: {
-    tabProduce: '🥣 খাবার উৎপাদন (Produce)',
-    tabRecipes: '📋 খাদ্য ফর্মুলা (Recipes)',
-    tabHistory: '📜 উৎপাদন ইতিহাস (Logs)',
-    quickProduceTitle: 'মুরগির সুষম খাবার তৈরি ও গুদামে সংরক্ষণ',
-    quickProduceSub: 'ফর্মুলা ও পরিমাণ নির্বাচন করুন; কাঁচামাল স্বয়ংক্রিয়ভাবে কমে যাবে ও তৈরি খাবার যুক্ত হবে।',
-    selectRecipe: 'খাদ্য ফর্মুলা নির্বাচন করুন:',
-    chooseRecipePlaceholder: '-- ফর্মুলা নির্বাচন করুন --',
-    batchQtyKg: 'মোট ওজন (কেজি / Kg):',
-    batchQtyBags: 'অথবা বস্তা সংখ্যা (৫০ কেজি বস্তা):',
-    bagsNote: '১ বস্তা = ৫০ কেজি হিসেবে হিসাব',
-    liveStockTitle: 'কাঁচামাল প্রাপ্যতা ও খরচ পর্যালোচনা:',
-    ingredient: 'কাঁচামাল',
-    formulaPct: 'অনুপাত (%)',
-    requiredQty: 'প্রয়োজনীয় ওজন',
-    availableStock: 'গুদামে মজুত',
-    stockStatus: 'অবস্থা',
-    sufficient: 'পর্যাপ্ত মজুত আছে',
-    shortage: 'কম আছে',
-    unitCost: 'ক্রয়মূল্য',
-    lineCost: 'মোট খরচ',
-    estTotalCost: 'মোট ব্যাচ খরচ:',
-    costPerKg: 'প্রতি কেজি খরচ:',
-    costPerBag: 'প্রতি ৫০ কেজি বস্তা:',
-    targetFeedNotice: 'তৈরি খাদ্য স্বয়ংক্রিয়ভাবে গুদামে এই নামে সংরক্ষিত হবে:',
-    produceBtn: '🥣 খাদ্য প্রস্তুত ও মজুতে জমা করুন',
-    producing: 'খাবার তৈরি হচ্ছে...',
-    newFormulaBtn: '+ নতুন ফর্মুলা তৈরি করুন',
-    formulaTemplates: 'রেডিমেড ফর্মুলা টেমপ্লেট:',
-    templateLayer: '🌾 লেয়ার খাবার',
-    templateStarter: '🐥 ব্রয়লার স্টার্টার',
-    templateFinisher: '🐔 ব্রয়লার ফিনিশার',
-    templateGrower: '🌱 গ্রোয়ার খাবার',
-    formulaName: 'ফর্মুলা নাম:',
-    formulaNamePlaceholder: 'যেমন: লেয়ার ম্যাশ - ফেজ ১',
-    targetFeedOptAuto: 'গুদাম স্টকে স্বয়ংক্রিয়ভাবে এই নামে খাদ্য তৈরি করুন',
-    targetFeedOptSelect: 'অথবা বিদ্যমান খাদ্য আইটেম সংযুক্ত করুন',
-    targetFeedSelectPlaceholder: '-- খাদ্য আইটেম বাছুন --',
-    notesLabel: 'বিবরণ:',
-    notesPlaceholder: 'পুষ্টি সংক্রান্ত তথ্য...',
-    ingredientsSection: 'উপাদান ও শতকরা হার (%):',
-    addIngredientBtn: '+ উপাদান যোগ করুন',
-    chooseIngredientPlaceholder: '-- উপাদান নির্বাচন করুন --',
-    pctLabel: 'শতকরা (%)',
-    balanceLabel: 'অনুপাত ব্যালেন্স:',
-    balanceOk: '১০০% সঠিক',
-    balanceNotOk: 'যোগফল ১০০% হতে হবে',
-    saveFormulaBtn: 'ফর্মুলা সেভ করুন',
-    cancelBtn: 'বাতিল করুন',
-    historyTitle: 'খাদ্য উৎপাদন হিসেব',
-    historySub: 'খামারে তৈরি করা খাবারের ব্যাচ বিবরণী।',
-    milledDate: 'তারিখ',
-    batchRecipe: 'ফর্মুলা',
-    outputProduct: 'তৈরি খাদ্য',
-    totalProduced: 'পরিমাণ',
-    totalCostLabel: 'খরচ',
-    statusLabel: 'অবস্থা',
-    storedInStock: 'গুদামে জমা',
-    noRecipesYet: 'কোনো ফর্মুলা নেই।',
-    createFirstRecipe: 'প্রথম ফর্মুলা তৈরি করুন',
-    produceNowBtn: '🥣 প্রস্তুত করুন',
-    autoInventoryNotice: 'সহজ পদ্ধতি: গুদামে আগে থেকে আইটেম তৈরি করার প্রয়োজন নেই।'
-  }
 };
 
-export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguage?: Language }) {
+export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
   const mt = millingText[currentLanguage] || millingText['en'];
   const t = translations[currentLanguage];
   const { currentFarm } = useFarm();
@@ -617,7 +240,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
         .filter((l) => l.isShort)
         .map((l) => `${l.itemName} (${l.shortageKg.toFixed(1)} Kg shortage)`)
         .join(', ');
-      setProductionError(`कच्चा माल अपुरा आहे (Insufficient Stock): ${shortItems}. कृपया आधी खरेदी किंवा स्टॉक अपडेट करा.`);
+      setProductionError(`Insufficient Raw Material Stock: ${shortItems}. Please update inventory or record purchases first.`);
       return;
     }
 
@@ -723,17 +346,17 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
   const handleSubmitRecipe = async (e: React.FormEvent) => {
     e.preventDefault();
     if (totalPercentage !== 100) {
-      alert(`घटकांची एकूण टक्केवारी बरोबर १००% असावी. सध्या: ${totalPercentage}%`);
+      alert(`Total ingredient percentage must equal 100%. Currently: ${totalPercentage}%`);
       return;
     }
     if (!recipeName.trim()) {
-      alert('कृपया फॉर्म्युला नाव टाका.');
+      alert('Please enter a recipe name.');
       return;
     }
 
     const emptyIngredients = items.some((it) => !it.IngredientId);
     if (emptyIngredients) {
-      alert('कृपया सर्व ओळींमध्ये कच्चा माल निवडा किंवा नको असलेली ओळ काढून टाका.');
+      alert('Please select raw materials for all ingredient rows or remove unused rows.');
       return;
     }
 
@@ -774,7 +397,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
 
   // Delete Recipe
   const handleDeleteRecipe = async (recipeId: number) => {
-    if (!confirm('हा फॉर्म्युला कायमचा हटवायचा आहे का?')) return;
+    if (!confirm('Are you sure you want to permanently delete this recipe?')) return;
     try {
       await recipeService.deleteRecipe(farmId, recipeId);
       await fetchData();
@@ -853,7 +476,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
       ) : (
         <>
           {/* ========================================================================= */}
-          {/* TAB 1: QUICK BATCH PRODUCTION (थेट खाद्य उत्पादन) */}
+          {/* TAB 1: QUICK BATCH PRODUCTION */}
           {/* ========================================================================= */}
           {activeTab === 'produce' && (
             <div className="space-y-6" id="quick-produce-tab">
@@ -868,7 +491,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                   <Layers className="h-12 w-12 text-slate-300 mx-auto" />
                   <div className="space-y-1">
                     <h3 className="text-base font-bold text-slate-800">{mt.noRecipesYet}</h3>
-                    <p className="text-xs text-slate-500">खाद्य बनवण्यासाठी आधी एखादा फॉर्म्युला तयार करा किंवा रेडीमेड टेम्पलेट वापरा.</p>
+                    <p className="text-xs text-slate-500">To produce feed, select an existing formula or create a recipe below टेम्पलेट वापरा.</p>
                   </div>
                   <button
                     onClick={() => { setActiveTab('recipes'); setShowAddForm(true); }}
@@ -918,7 +541,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                             <Calculator className="h-4 w-4 text-slate-500" />
-                            उत्पादन प्रमाण (Batch Size):
+                            Batch Production Quantity (Kg):
                           </span>
                           <span className="text-[10px] text-slate-400 font-medium">{mt.bagsNote}</span>
                         </div>
@@ -986,12 +609,12 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                         <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl space-y-2">
                           <div className="flex items-center gap-2 text-emerald-900 font-bold text-sm">
                             <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                            खाद्य उत्पादन यशस्वीरित्या पूर्ण झाले!
+                            Feed production completed successfully!
                           </div>
                           <div className="text-xs text-emerald-800 space-y-1 pl-7 font-mono">
-                            <div>• उत्पादित खाद्य: <b>{productionSuccess.quantityKg} Kg</b> ({productionSuccess.bags} गोण्या)</div>
-                            <div>• जमा केलेला आयटम: <b>{productionSuccess.targetItemName}</b></div>
-                            <div>• एकूण बॅच खर्च: <b>₹{productionSuccess.totalCost.toFixed(2)}</b> (₹{productionSuccess.costPerKg.toFixed(2)}/Kg)</div>
+                            <div>• Produced Feed: <b>{productionSuccess.quantityKg} Kg</b> ({productionSuccess.bags} bags)</div>
+                            <div>• Inventory Item Deposited: <b>{productionSuccess.targetItemName}</b></div>
+                            <div>• Total Batch Cost: <b>₹{productionSuccess.totalCost.toFixed(2)}</b> (₹{productionSuccess.costPerKg.toFixed(2)}/Kg)</div>
                           </div>
                         </div>
                       )}
@@ -1022,7 +645,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
 
                       {batchStockCheck.hasShortage && (
                         <p className="text-[11px] text-rose-600 text-center font-medium">
-                          ⚠️ काही घटकांचा साठा कमी असल्यामुळे आधी स्टॉक अपडेट करा.
+                          ⚠️ Some ingredients are short in stock. Update inventory before producing.
                         </p>
                       )}
                     </div>
@@ -1038,13 +661,13 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                             {mt.liveStockTitle}
                           </h3>
                           <p className="text-xs text-slate-500 mt-0.5">
-                            फॉर्म्युला: <b className="text-slate-800">{activeRecipe?.RecipeName}</b> ({batchQuantityKg} Kg बॅच)
+                            Recipe: <b className="text-slate-800">{activeRecipe?.RecipeName}</b> ({batchQuantityKg} Kg batch)
                           </p>
                         </div>
                         <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${
                           batchStockCheck.hasShortage ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
                         }`}>
-                          {batchStockCheck.hasShortage ? '❌ कच्चा माल अपुरा' : '✅ सर्व घटक उपलब्ध'}
+                          {batchStockCheck.hasShortage ? '❌ Insufficient Stock' : '✅ All Items In Stock'}
                         </span>
                       </div>
 
@@ -1067,7 +690,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                                 <td className="py-2.5 px-3 font-semibold text-slate-900">
                                   {line.itemName}
                                   <span className="block text-[10px] text-slate-400 font-normal">
-                                    दर: ₹{line.unitPrice.toFixed(2)}/Kg
+                                    Rate: ₹{line.unitPrice.toFixed(2)}/Kg
                                   </span>
                                 </td>
                                 <td className="py-2.5 px-2 text-center font-mono font-bold text-indigo-700">
@@ -1130,7 +753,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
           )}
 
           {/* ========================================================================= */}
-          {/* TAB 2: RECIPES MANAGEMENT & CREATION (खाद्य फॉर्म्युले) */}
+          {/* TAB 2: RECIPES MANAGEMENT & CREATION */}
           {/* ========================================================================= */}
           {activeTab === 'recipes' && (
             <div className="space-y-6" id="recipes-tab">
@@ -1139,10 +762,10 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                 <div>
                   <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                     <Layers className="h-5 w-5 text-indigo-600" />
-                    फार्मवरील खाद्य फॉर्म्युले (Formulations)
+                    Farm Feed Formulations & Recipes
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    खाद्य तयार करण्यासाठी फॉर्म्युला जोडा किंवा बदला. सिस्टीम आपोआप गोदामात तयार खाद्य तयार करेल.
+                    Create or update feed formulas. The system will automatically link batch outputs to warehouse stock.
                   </p>
                 </div>
                 <button
@@ -1165,9 +788,9 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                   <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                     <h3 className="text-base font-bold font-display text-slate-900 flex items-center gap-2">
                       <Sparkles className="h-5 w-5 text-amber-500" />
-                      नवीन खाद्य फॉर्म्युला तयार करा
+                      Create New Feed Recipe
                     </h3>
-                    <span className="text-xs text-slate-500 font-mono">फार्म #{farmId}</span>
+                    <span className="text-xs text-slate-500 font-mono">Farm #{farmId}</span>
                   </div>
 
                   {/* 1-Click Quick Presets */}
@@ -1227,7 +850,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                     {/* Target Product Selection / Auto-create Toggle */}
                     <div className="space-y-2">
                       <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">
-                        गोदाम स्टॉक लिंकेज (Inventory Output):
+                        Finished Feed Inventory Item:
                       </label>
                       <div className="space-y-2 text-xs">
                         <label className="flex items-center gap-2 cursor-pointer">
@@ -1261,7 +884,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                             <option value="">{mt.targetFeedSelectPlaceholder}</option>
                             {feeds.map((f) => (
                               <option key={f.Id} value={f.Id}>
-                                {f.ItemName} (शिल्लक: {f.CurrentStock} {f.UnitOfMeasurement})
+                                {f.ItemName} (In Stock: {f.CurrentStock} {f.UnitOfMeasurement})
                               </option>
                             ))}
                           </select>
@@ -1322,7 +945,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                               <option value="">{mt.chooseIngredientPlaceholder}</option>
                               {allInventories.map((ing) => (
                                 <option key={ing.Id} value={ing.Id}>
-                                  {ing.ItemName} [शिल्लक: {ing.CurrentStock} {ing.UnitOfMeasurement} | दर: ₹{ing.UnitPrice}]
+                                  {ing.ItemName} [In Stock: {ing.CurrentStock} {ing.UnitOfMeasurement} | Rate: ₹{ing.UnitPrice}]
                                 </option>
                               ))}
                             </select>
@@ -1402,7 +1025,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                       className="px-5 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
                       id="save-recipe-submit-btn"
                     >
-                      {savingRecipe ? 'सेव्ह करत आहे...' : mt.saveFormulaBtn}
+                      {savingRecipe ? 'Saving...' : mt.saveFormulaBtn}
                     </button>
                   </div>
                 </form>
@@ -1422,7 +1045,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                             {row.RecipeName}
                           </h3>
                           <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md inline-block mt-1">
-                            गोदाम आयटम: {row.TargetItemName || row.RecipeName}
+                            Finished Stock Item: {row.TargetItemName || row.RecipeName}
                           </span>
                         </div>
                         <button
@@ -1443,7 +1066,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                       {/* Ingredients Breakdown */}
                       <div className="border-t border-slate-100 pt-3 space-y-1.5">
                         <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-                          घटक प्रमाण (Ingredients):
+                          Ingredient Breakdown:
                         </span>
                         <div className="space-y-1">
                           {(row.Ingredients || []).map((ing: any, i: number) => (
@@ -1484,7 +1107,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
           )}
 
           {/* ========================================================================= */}
-          {/* TAB 3: PRODUCTION LOGS & HISTORY (उत्पादन नोंदवही) */}
+          {/* TAB 3: PRODUCTION LOGS & HISTORY */}
           {/* ========================================================================= */}
           {activeTab === 'history' && (
             <div className="space-y-6" id="history-tab">
@@ -1500,7 +1123,7 @@ export default function MillingRoom({ currentLanguage = 'mr' }: { currentLanguag
                 <div className="bg-white p-12 text-center rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
                   <History className="h-10 w-10 text-slate-300 mx-auto" />
                   <p className="text-xs text-slate-500 font-medium">
-                    या फार्मवर अजून कोणतेही उत्पादन नोंदवलेले नाही.
+                    No feed production batches recorded on this farm yet.
                   </p>
                 </div>
               ) : (

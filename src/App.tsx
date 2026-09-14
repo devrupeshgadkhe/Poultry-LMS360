@@ -76,12 +76,8 @@ type Tab =
 export default function App() {
   const { currentFarm, farms, switchFarm } = useFarm();
   const [currentLanguage, setCurrentLanguage] = useState<Language>(() => {
-    const saved = localStorage.getItem('poultry_lang');
-    if (saved === 'mr') {
-      localStorage.setItem('poultry_lang', 'en');
-      return 'en';
-    }
-    return (saved as Language) || 'en';
+    localStorage.setItem('poultry_lang', 'en');
+    return 'en';
   });
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [username, setUsername] = useState<string | null>(localStorage.getItem('userName'));
@@ -466,14 +462,14 @@ export default function App() {
         if (!res.ok) {
           throw new Error(
             res.status === 404
-              ? 'बॅकएंड API सर्व्हर उपलब्ध नाही (HTTP 404). कृपया Vercel सर्व्हरलेस फंक्शन डिप्लॉय तपासा.'
-              : `सर्व्हरकडून त्रुटी मिळाली (HTTP ${res.status}): ${rawText.substring(0, 100)}`
+              ? 'Backend API server unavailable (HTTP 404). Please check server connection.'
+              : `Server error (HTTP ${res.status}): ${rawText.substring(0, 100)}`
           );
         }
         try {
           data = JSON.parse(rawText);
         } catch {
-          throw new Error('सर्व्हरकडून अमान्य प्रतिसाद आला.');
+          throw new Error('Invalid response received from server.');
         }
       }
 

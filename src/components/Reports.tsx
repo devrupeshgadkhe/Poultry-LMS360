@@ -41,33 +41,7 @@ import { Language, translations } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { reportsService } from '../lib/dataService';
 
-const reportTranslations: Record<Language, {
-  title: string;
-  sub: string;
-  opSheets: string;
-  specLedgers: string;
-  exportCsv: string;
-  printPdf: string;
-  dateFrom: string;
-  dateTo: string;
-  flockCtx: string;
-  allGroups: string;
-  performance: string;
-  financial: string;
-  profitAndLoss: string;
-  flockPandL: string;
-  currentStockVal: string;
-  unifiedDaily: string;
-  salesSummary: string;
-  materialProc: string;
-  feedFormulation: string;
-  eggOutput: string;
-  biometricBird: string;
-  eggAudit: string;
-  stockMovement: string;
-  custOutstanding: string;
-  suppAP: string;
-}> = {
+const reportTranslations: Record<Language, any> = {
   en: {
     title: 'Poultry Ledger Reports Center',
     sub: 'Double-entry ledger balances and real-time biometric flock performance calculations.',
@@ -95,141 +69,6 @@ const reportTranslations: Record<Language, {
     custOutstanding: 'Customer Outstanding',
     suppAP: 'Supplier Accounts AP'
   },
-  hi: {
-    title: 'पोल्ट्री बहीखाता रिपोर्ट सेंटर',
-    sub: 'द्वि-अंकन बहीखाता शेष और वास्तविक समय के जैविक झुंड प्रदर्शन की गणना।',
-    opSheets: 'परिचालन पत्रक (Operational Sheets)',
-    specLedgers: 'विशिष्ट बहीखाते (Specialized Ledgers)',
-    exportCsv: 'सीएसवी स्प्रेडशीट डाउनलोड करें',
-    printPdf: 'लेजर प्रिंट करें / पीडीएफ',
-    dateFrom: 'प्रारंभिक तिथि से',
-    dateTo: 'अंतिम तिथि तक',
-    flockCtx: 'विशेष झुंड चुनें (Flock)',
-    allGroups: 'सभी समूह (वैश्विक औसत)',
-    performance: 'प्रदर्शन सूचकांक (Performance)',
-    financial: 'वित्तीय रोजनामचा (Financial)',
-    profitAndLoss: 'लाभ और हानि विवरण (P&L)',
-    flockPandL: 'झुंड-विशिष्ट लाभ-हानि',
-    currentStockVal: 'गोदाम स्टॉक संचित मूल्य',
-    unifiedDaily: 'एकीकृत दैनिक खाता बही',
-    salesSummary: 'कुल बिक्री रिपोर्ट विवरण',
-    materialProc: 'सामग्री व चारा खरीद रसीदें',
-    feedFormulation: 'चारा पिसाई व मिक्स रूम लॉग',
-    eggOutput: 'अंडा उत्पादन संकेतक चार्ट',
-    biometricBird: 'मुर्गियों की कुल गणना बही',
-    eggAudit: 'अंडा इन्वेंट्री ऑडिट बहीखाता',
-    stockMovement: 'स्टॉक आवागमन रिपोर्ट बही',
-    custOutstanding: 'ग्राहकों का कुल बकाया धन',
-    suppAP: 'सप्लायर बिल भुगतानों का लेखा-जोखा'
-  },
-  mr: {
-    title: 'पोल्ट्री लेजर अहवाल केंद्र',
-    sub: 'दुहेरी नोंद नोंद खाते शिल्लक आणि रिअल-टाइम बायोमेट्रिक कळप कामगिरीचे हिशोब.',
-    opSheets: 'ऑपरेशनल शीट्स',
-    specLedgers: 'विशेष बहीखाते (Specialized Ledgers)',
-    exportCsv: 'सीएसव्ही निर्यात करा',
-    printPdf: 'लेजर प्रिंट करा / पीडीएफ',
-    dateFrom: 'प्रारंभिक तारीख पासून',
-    dateTo: 'अंतिम तारीख पर्यंत',
-    flockCtx: 'कोंबड्यांचा गट निवडा',
-    allGroups: 'सर्व गट (एकत्रित सरासरी)',
-    performance: 'कामगिरी निर्देशांक (Performance)',
-    financial: 'वित्तीय जर्नल्स (Financial)',
-    profitAndLoss: 'नफा आणि तोटा पत्रक (P&L)',
-    flockPandL: 'गटनाहाय नफा-तोटा',
-    currentStockVal: 'सध्याचे एकूण स्टॉक मूल्य',
-    unifiedDaily: 'एकत्रित दैनिक खातेवही',
-    salesSummary: 'विक्री लेजर सारांश',
-    materialProc: 'साहित्य व चारा खरेदी रिपोर्ट',
-    feedFormulation: 'चारा मिश्रण व दळण नोंदणी',
-    eggOutput: 'अंडी उत्पादन चार्ट आलेख',
-    biometricBird: 'कोंबड्यांची शिल्लक मोजणी बही',
-    eggAudit: 'अंडी साठा ऑडिट बहीखाता',
-    stockMovement: 'स्टॉक हालचाल लेजर बही',
-    custOutstanding: 'ग्राहकांचे एकूण येणे बाकी',
-    suppAP: 'व्यापाऱ्यांना द्यायचे पेमेंट बाकी'
-  },
-  gu: {
-    title: 'મરઘાઉછેર ખાતાવહી અહેવાલ કેન્દ્ર',
-    sub: 'દ્વિ-노ંધ ખાતાવહી બેલેન્સ અને વાસ્તવિક સમયના બાયોમેટ્રિક ફ્લોક પ્રદર્શનની ગણતરી.',
-    opSheets: 'ઓપરેશનલ રિપોર્ટ પત્રકો',
-    specLedgers: 'વિશેષ ખાતાવહીઓ',
-    exportCsv: 'સીએસવી ડાઉનલોડ કરો',
-    printPdf: 'અહેવાલ પ્રિન્ટ કરો / પીડીએફ',
-    dateFrom: 'આ તારીખથી',
-    dateTo: 'આ તારીખ સુધી',
-    flockCtx: 'મરઘી ફ્લોક સિલેક્ટ કરો',
-    allGroups: 'બધા જૂથો (સરેરાશ)',
-    performance: 'પ્રદર્શન ઇન્ડેક્સ (Performance)',
-    financial: 'નાણાકીય જર્નલ (Financial)',
-    profitAndLoss: 'નફો અને નુકસાન અહેવાલ (P&L)',
-    flockPandL: 'જૂથ આધારિત નફો-નુકસાન',
-    currentStockVal: 'હાલનું સ્ટોક મૂલ્ય સંચિત',
-    unifiedDaily: 'દૈનિક સંયુક્ત ખાતાવહી',
-    salesSummary: 'વેચાણ ખાતાવહી સારાંશ',
-    materialProc: 'ખરીદી અને ખરીદેલા માલની વિગત',
-    feedFormulation: 'ખોરાક મિશ્રેણ દૈનિક રેકોર્ડ',
-    eggOutput: 'ઈંડા ઉત્પાદન ગ્રાફિકલ નકશો',
-    biometricBird: 'મરઘીઓની કુલ સંખ્યા ગણતરી બુક',
-    eggAudit: 'ઈંડા સ્ટોક ઓડિટ ખાતાવહી',
-    stockMovement: 'સ્ટોક આવક-જાવક હિસાબ પત્રક',
-    custOutstanding: 'ગ્રાહકો પાસેથી બાકી લેણું',
-    suppAP: 'સપ્લાયર દેવું ચૂકવણું હિસાબ'
-  },
-  te: {
-    title: 'కోళ్ల ఫారమ్ ఖాతాల రిపోర్టుల కేంద్రం',
-    sub: 'డబుల్ ఎంట్రీ లెడ్జర్ బ్యాలెన్సులు మరియు రియల్-టైమ్ బయోమెట్రిక్ ఫ్లాక్ పనితీరు కాలిక్యులేషన్స్.',
-    opSheets: 'నిర్వహణ రికార్డు రిపోర్టులు',
-    specLedgers: 'ప్రత్యేక ఖాతాల లెడ్జర్లు',
-    exportCsv: 'CSV ఫార్మాట్ లో డౌన్లోడ్',
-    printPdf: 'ప్రింట్ లెడ్జర్ / PDF',
-    dateFrom: 'ప్రారంభ తేదీ నుండి',
-    dateTo: 'ముగింపు తేదీ వరకు',
-    flockCtx: 'కోళ్ల బ్యాచ్ కాంటెక్స్ట్',
-    allGroups: 'అన్ని బ్యాచ్‌లు (సగటున)',
-    performance: 'పనితీరు ఇండెక్స్ (Performance)',
-    financial: 'ఆర్థిక జర్నల్ (Financial)',
-    profitAndLoss: 'లాభ నష్టాల నివేదిక (P&L)',
-    flockPandL: 'ఫ్లాక్ వారీ లాభ నష్టాలు',
-    currentStockVal: 'నిల్వల ప్రస్తుత విలువ సమాచారం',
-    unifiedDaily: 'రోజువారీ జర్నల్ లెడ్జర్',
-    salesSummary: 'అమ్మకాల సమగ్ర నివేదిక',
-    materialProc: 'కొనుగోళ్ల సవివర నివేదిక',
-    feedFormulation: 'మేత తయారీ రికార్డు',
-    eggOutput: 'గుడ్ల ఉత్పత్తి గ్రాఫికల్ చార్ట్',
-    biometricBird: 'కోళ్ల బయోమెట్రిక్ గణన',
-    eggAudit: 'గుడ్ల నిల్వల ఆడిట్ లెడ్జర్',
-    stockMovement: 'స్టాక్ లోడ్స్ బదిలీ లెడ్జర్',
-    custOutstanding: 'కస్టమర్ల బాకీ సమాచారం',
-    suppAP: 'సప్లయర్ల పేమెంట్ లెడ్జర్'
-  },
-  bn: {
-    title: 'পোল্ট্রি লেজার রিপোর্ট সেন্টার',
-    sub: 'ডাবল-এন্ট্রি লেজার ব্যালেন্স এবং রিয়েল-টাইম বায়োমেট্রিক ফ্লক পারফরম্যান্স গণনা।',
-    opSheets: 'অপারেশনাল শীটসমূহ',
-    specLedgers: 'বিশেষায়িত লেজার বই',
-    exportCsv: 'স্প্রেডশীট এক্সপোর্ট CSV',
-    printPdf: 'লেজার প্রিন্ট করুন / PDF',
-    dateFrom: 'শুরুর তারিখ',
-    dateTo: 'শেষের তারিখ',
-    flockCtx: 'ফ্লক গ্রুপ কনটেক্সট',
-    allGroups: 'সকল গ্রুপ (গড় হিসাব)',
-    performance: 'পারফরম্যান্স ইনডেক্স',
-    financial: 'আর্থিক জার্নাল ক্যাশ বুক',
-    profitAndLoss: 'লাভ ও লোকসান বিবরণী (P&L)',
-    flockPandL: 'ফ্লকভিত্তিক লাভ-লোকসান হিসাব',
-    currentStockVal: 'বর্তমান মোট স্টক মূল্যায়ন',
-    unifiedDaily: 'সমন্বিত দৈনিক লেজার বিবরণী',
-    salesSummary: 'বিক্রয় লেজার সংক্ষিপ্ত রূপ',
-    materialProc: 'মালামাল ও ফিড ক্রয়ের খতিয়ান',
-    feedFormulation: 'মুরগির খাদ্য প্রস্তুত বিবরণী',
-    eggOutput: 'ডিম উৎপাদন চার্ট ও গ্রাফ',
-    biometricBird: 'বায়োমেট্রিক পাখি গণনা ও বিবরণ',
-    eggAudit: 'ডিম ইনভেন্টরি নিরীক্ষা রেজিস্টার',
-    stockMovement: 'স্টক আসা-যাওয়ার ট্র্যাকার',
-    custOutstanding: 'গ্রাহকদের বকেয়া ঋণের খতিয়ান',
-    suppAP: 'সাপ্লায়ার দেনা ও পেমেন্ট রেকর্ড'
-  }
 };
 
 interface ReportsProps {
@@ -1287,7 +1126,7 @@ export default function Reports({ currentLanguage }: ReportsProps) {
         {['InventoryLedger'].includes(activeTab) && (
           <div className="space-y-1 col-span-2 lg:col-span-1">
             <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">
-              {currentLanguage === 'hi' ? 'सामग्री उत्पाद चुनें' : currentLanguage === 'mr' ? 'माल साठा निवडा' : currentLanguage === 'gu' ? 'માલ સામગ્રી આઇટમ' : currentLanguage === 'te' ? 'స్టాక్ ఐటమ్ ఎంచుకోండి' : currentLanguage === 'bn' ? 'স্টক আইটেম নির্বাচন করুন' : 'Select Inventory Item'}
+              'Select Inventory Item'
             </label>
             <select value={selectedItemId} onChange={e => setSelectedItemId(e.target.value)} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-hidden focus:ring-1 focus:ring-indigo-500 font-mono">
               {inventories.map((i: any) => <option key={i.Id} value={i.Id}>{i.ItemName} ({i.Category})</option>)}
@@ -1298,11 +1137,11 @@ export default function Reports({ currentLanguage }: ReportsProps) {
         {['CustomerLedger', 'Sales'].includes(activeTab) && (
           <div className="space-y-1 col-span-2 lg:col-span-1">
             <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">
-              {currentLanguage === 'hi' ? 'ग्राहक खाता' : currentLanguage === 'mr' ? 'ग्राहक खाते' : currentLanguage === 'gu' ? 'ગ્રાહક ખાતું' : currentLanguage === 'te' ? 'కస్టమర్ ఖాతా' : currentLanguage === 'bn' ? 'গ্রাহক অ্যাকাউন্ট' : 'Customer Account'}
+              'Customer Account'
             </label>
             <select value={selectedCustomerId} onChange={e => setSelectedCustomerId(e.target.value)} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-hidden focus:ring-1 focus:ring-indigo-500 font-mono">
               <option value="All">
-                {currentLanguage === 'hi' ? 'सभी पंजीकृत ग्राहक' : currentLanguage === 'mr' ? 'सर्व नोंदणीकृत ग्राहक' : currentLanguage === 'gu' ? 'બધા ગ્રાહકો' : currentLanguage === 'te' ? 'అందరు కస్టమర్లు' : currentLanguage === 'bn' ? 'সকল নিবন্ধিত গ্রাহক' : 'All Registered Customers'}
+                'All Registered Customers'
               </option>
               {customers.map((c: any) => <option key={c.Id} value={c.Id}>{c.FullName}</option>)}
             </select>
@@ -1312,11 +1151,11 @@ export default function Reports({ currentLanguage }: ReportsProps) {
         {['SupplierLedger', 'Purchases'].includes(activeTab) && (
           <div className="space-y-1 col-span-2 lg:col-span-1">
             <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">
-              {currentLanguage === 'hi' ? 'सप्लायर खाता' : currentLanguage === 'mr' ? 'विक्रेता (सप्लायर) खाते' : currentLanguage === 'gu' ? 'સપ્લાયર ખાતું' : currentLanguage === 'te' ? 'సప్లయర్ ఖాతా' : currentLanguage === 'bn' ? 'সাপ্লায়ার অ্যাকাউন্ট' : 'Supplier Account'}
+              'Supplier Account'
             </label>
             <select value={selectedSupplierId} onChange={e => setSelectedSupplierId(e.target.value)} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-hidden focus:ring-1 focus:ring-indigo-500 font-mono">
               <option value="All">
-                {currentLanguage === 'hi' ? 'सभी थोक व्यापारी' : currentLanguage === 'mr' ? 'सर्व घाऊक व्यापारी' : currentLanguage === 'gu' ? 'બધા જથ્થાબંધ વેપારીઓ' : currentLanguage === 'te' ? 'అందరు సప్లయర్లు' : currentLanguage === 'bn' ? 'সকল পাইকারি বিক্রেতা' : 'All Wholesalers'}
+                'All Wholesalers'
               </option>
               {suppliers.map((s: any) => <option key={s.Id} value={s.Id}>{s.CompanyName}</option>)}
             </select>
@@ -1327,11 +1166,11 @@ export default function Reports({ currentLanguage }: ReportsProps) {
         {['Financial', 'Sales', 'Purchases', 'Production'].includes(activeTab) && (
           <div className="space-y-1 col-span-2 lg:col-span-2">
             <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">
-              {currentLanguage === 'hi' ? 'त्वरित खोज चालान / संदर्भ' : currentLanguage === 'mr' ? 'स्मार्ट शोध' : currentLanguage === 'gu' ? 'ઝડપી શોધ બિલ વિગત' : currentLanguage === 'te' ? 'సెర్చ్ ఇన్వాయిస్ / రెఫరెన్స్' : currentLanguage === 'bn' ? 'চাটজলদি সার্চ ইনভয়েস' : 'Quick Search Invoice / Reference'}
+              'Quick Search Invoice / Reference'
             </label>
             <div className="relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-              <input type="text" placeholder={currentLanguage === 'hi' ? 'खोजें...' : currentLanguage === 'mr' ? 'शोधा...' : 'Search...'} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-hidden focus:ring-1 focus:ring-indigo-500 font-mono" />
+              <input type="text" placeholder='Search...' value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-hidden focus:ring-1 focus:ring-indigo-500 font-mono" />
             </div>
           </div>
         )}
