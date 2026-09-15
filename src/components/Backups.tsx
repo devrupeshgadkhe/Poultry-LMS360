@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Download, Cloud, ShieldAlert, CheckCircle, RefreshCcw, Upload, Trash2, HardDrive, AlertTriangle, Key } from 'lucide-react';
 import { translations, Language } from '../translations';
+import { useFarm } from '../context/FarmContext';
 
 export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
   const t = translations[currentLanguage];
+  const { currentFarm } = useFarm();
+  const activeFarmId = currentFarm?.Id || Number(localStorage.getItem('active_farm_id')) || Number(localStorage.getItem('userFarmId')) || 1;
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -83,7 +86,24 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
 
     try {
       const text = await file.text();
-      const payload = JSON.parse(text);
+      let payload: any = null;
+      const cleanText = text.trim();
+
+      // Check if raw cipher text was uploaded (e.g. cipher.txt)
+      if (cleanText.includes(':') && /^[0-9a-fA-F]{32}:[0-9a-fA-F]+$/.test(cleanText)) {
+        payload = { encrypted: true, data: cleanText };
+      } else {
+        try {
+          payload = JSON.parse(cleanText);
+        } catch (parseErr) {
+          // Check if payload string itself is raw encrypted text
+          if (cleanText.includes(':')) {
+            payload = { encrypted: true, data: cleanText };
+          } else {
+            throw parseErr;
+          }
+        }
+      }
 
       // Validate formatting structure (can be plain database JSON or encrypted JSON)
       if (payload && payload.encrypted === true && typeof payload.data === 'string') {
@@ -136,8 +156,14 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
     try {
       const res = await fetch('/api/backups/restore', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(stagedBackupData)
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Farm-Id': String(activeFarmId)
+        },
+        body: JSON.stringify({
+          ...stagedBackupData,
+          farmId: activeFarmId
+        })
       });
 
       const data = await res.json();
@@ -251,7 +277,14 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
     setSuccessMsg(null);
     setErrMsg(null);
     try {
-      const res = await fetch(`/api/backups/local/${filename}/restore`, { method: 'POST' });
+      const res = await fetch(`/api/backups/local/${filename}/restore`, { 
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Farm-Id': String(activeFarmId)
+        },
+        body: JSON.stringify({ farmId: activeFarmId })
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Snapshot restoration rejected.');
       setSuccessMsg(`System database successfully reverted to physical snapshot: "${filename}"!`);

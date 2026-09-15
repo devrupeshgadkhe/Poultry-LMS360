@@ -306,6 +306,137 @@ export async function createSupabaseFarm(farmData: {
 }
 
 /**
+ * Sync single record to Supabase Cloud
+ */
+export async function syncRecordToSupabase(tableName: string, record: any): Promise<void> {
+  if (!supabaseServer || !record) return;
+  try {
+    const cleanRecord = { ...record };
+    // Upsert by Id if Id is present and > 0, otherwise insert
+    if (cleanRecord.Id) {
+      const { error } = await supabaseServer.from(tableName).upsert([cleanRecord], { onConflict: 'Id' });
+      if (error) {
+        console.warn(`[Supabase Push] Warning upserting to ${tableName}:`, error.message);
+      }
+    } else {
+      const { error } = await supabaseServer.from(tableName).insert([cleanRecord]);
+      if (error) {
+        console.warn(`[Supabase Push] Warning inserting to ${tableName}:`, error.message);
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[Supabase Push] Failed for ${tableName}:`, err.message);
+  }
+}
+
+/**
+ * Delete record from Supabase Cloud
+ */
+export async function deleteRecordFromSupabase(tableName: string, id: number, farmId?: number): Promise<void> {
+  if (!supabaseServer || !id) return;
+  try {
+    let q = supabaseServer.from(tableName).delete().eq('Id', id);
+    if (farmId) {
+      q = q.eq('FarmId', farmId);
+    }
+    const { error } = await q;
+    if (error) {
+      console.warn(`[Supabase Delete] Warning on ${tableName} #${id}:`, error.message);
+    }
+  } catch (err: any) {
+    console.warn(`[Supabase Delete] Failed on ${tableName} #${id}:`, err.message);
+  }
+}
+
+const OPERATIONAL_TABLES = [
+  'Flocks',
+  'DailyLogs',
+  'Inventories',
+  'EggInventories',
+  'Vaccinations',
+  'Customers',
+  'Suppliers',
+  'Purchases',
+  'PurchaseItems',
+  'Sales',
+  'SaleItems',
+  'FoodRecipes',
+  'FinancialTransactions',
+  'TransactionCategories',
+  'Staff'
+];
+
+/**
+ * Bi-directional synchronization between local SQLite and Supabase Cloud
+ */
+export async function syncAllTablesBidirectional(): Promise<Record<string, { pulled: number; pushed: number }>> {
+  const stats: Record<string, { pulled: number; pushed: number }> = {};
+  if (!supabaseServer) return stats;
+
+  try {
+    // 1. Sync Farms & Users first
+    await syncSupabaseToLocal();
+
+    // 2. Sync all operational tables
+    for (const table of OPERATIONAL_TABLES) {
+      stats[table] = { pulled: 0, pushed: 0 };
+      try {
+        // Check if local table exists and get columns
+        const colsInfo = await query.all(`PRAGMA table_info(\`${table}\`)`);
+        if (!colsInfo || colsInfo.length === 0) continue;
+        const localColNames = new Set(colsInfo.map((c: any) => c.name));
+
+        // Pull from Supabase -> SQLite
+        const { data: sbRows, error: sbErr } = await supabaseServer.from(table).select('*');
+        if (!sbErr && sbRows && sbRows.length > 0) {
+          for (const row of sbRows) {
+            const filteredRow: Record<string, any> = {};
+            for (const [k, v] of Object.entries(row)) {
+              if (localColNames.has(k)) {
+                filteredRow[k] = v;
+              }
+            }
+            const keys = Object.keys(filteredRow);
+            if (keys.length > 0) {
+              const columns = keys.map(k => `\`${k}\``).join(', ');
+              const placeholders = keys.map(() => '?').join(', ');
+              const values = keys.map(k => filteredRow[k]);
+              await query.run(
+                `INSERT OR REPLACE INTO \`${table}\` (${columns}) VALUES (${placeholders})`,
+                values
+              );
+              stats[table].pulled++;
+            }
+          }
+        }
+
+        // Push from SQLite -> Supabase (records that may only exist locally)
+        const localRows = await query.all(`SELECT * FROM \`${table}\``);
+        if (localRows && localRows.length > 0) {
+          const sbIdSet = new Set((sbRows || []).map((r: any) => r.Id));
+          const missingInSb = localRows.filter((lr: any) => lr.Id && !sbIdSet.has(lr.Id));
+          if (missingInSb.length > 0) {
+            for (let i = 0; i < missingInSb.length; i += 50) {
+              const chunk = missingInSb.slice(i, i + 50);
+              const { error: pushErr } = await supabaseServer.from(table).upsert(chunk, { onConflict: 'Id' });
+              if (!pushErr) {
+                stats[table].pushed += chunk.length;
+              }
+            }
+          }
+        }
+      } catch (tblErr: any) {
+        console.warn(`[Bidirectional Sync] Warning on table ${table}:`, tblErr.message);
+      }
+    }
+  } catch (err: any) {
+    console.error('[Bidirectional Sync] Critical error:', err.message);
+  }
+
+  return stats;
+}
+
+/**
  * Sync Supabase data into local SQLite on startup
  */
 export async function syncSupabaseToLocal() {
@@ -314,8 +445,6 @@ export async function syncSupabaseToLocal() {
     // 1. Sync Farms
     const { data: farms } = await supabaseServer.from('Farms').select('*');
     if (farms && farms.length > 0) {
-      // Clear out fake hardcoded farms first if any
-      await query.run('DELETE FROM Farms');
       for (const f of farms) {
         await query.run(`
           INSERT OR REPLACE INTO Farms (Id, FarmName, OwnerName, ContactPhone, ContactEmail, Address, IsActive, CreatedAt)

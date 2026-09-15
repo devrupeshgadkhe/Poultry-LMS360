@@ -22,7 +22,7 @@ import { backupControllers } from './backups.js';
 import { settingsControllers, userManagementControllers } from './settingsControllers.js';
 import { bulkImportControllers } from './bulkImportControllers.js';
 import { migrationControllers } from './migrationControllers.js';
-import { getSupabaseFarms, createSupabaseFarm, syncSupabaseToLocal } from './supabase.js';
+import { getSupabaseFarms, createSupabaseFarm, syncSupabaseToLocal, syncAllTablesBidirectional } from './supabase.js';
 
 let dbInitPromise: Promise<void> | null = null;
 
@@ -33,8 +33,8 @@ export function ensureDatabaseInitialized(): Promise<void> {
         console.log('[App Init] Initializing database...');
         await initializeDatabase();
         console.log('[App Init] Database initialization complete.');
-        // Synchronize Supabase Cloud users and farms
-        await syncSupabaseToLocal();
+        // Synchronize Supabase Cloud operational tables with local SQLite
+        await syncAllTablesBidirectional();
         // Run background biological flock aging check
         await settingsControllers.backgroundSyncAges();
       } catch (err) {
@@ -261,6 +261,60 @@ apiRouter.get('/backups/status', backupControllers.getStatus);
 // Developer Migration API
 apiRouter.post('/migration/analyze', migrationControllers.analyzeLegacyBackup);
 apiRouter.post('/migration/execute', migrationControllers.executeMigration);
+
+// Bi-Directional Multi-Device Cloud & Local Synchronization
+apiRouter.post('/sync/record', async (req, res) => {
+  try {
+    const { table, action, data } = req.body;
+    if (!table || !data) return res.status(400).json({ error: 'table and data required' });
+    
+    // Check if table exists in local DB
+    const colsInfo = await query.all(`PRAGMA table_info(\`${table}\`)`);
+    if (!colsInfo || colsInfo.length === 0) {
+      return res.status(400).json({ error: `Table ${table} not found` });
+    }
+    const validCols = new Set(colsInfo.map((c: any) => c.name));
+
+    if (action === 'delete') {
+      if (data.Id) {
+        if (validCols.has('FarmId') && data.FarmId) {
+          await query.run(`DELETE FROM \`${table}\` WHERE Id = ? AND FarmId = ?`, [data.Id, data.FarmId]);
+        } else {
+          await query.run(`DELETE FROM \`${table}\` WHERE Id = ?`, [data.Id]);
+        }
+      }
+      return res.json({ success: true });
+    }
+
+    // Upsert into local SQLite
+    const filtered: Record<string, any> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (validCols.has(k)) {
+        filtered[k] = v;
+      }
+    }
+    const keys = Object.keys(filtered);
+    if (keys.length > 0) {
+      const columns = keys.map(k => `\`${k}\``).join(', ');
+      const placeholders = keys.map(() => '?').join(', ');
+      const values = keys.map(k => filtered[k]);
+      await query.run(`INSERT OR REPLACE INTO \`${table}\` (${columns}) VALUES (${placeholders})`, values);
+    }
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error('[Sync Record API] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/sync/all', async (req, res) => {
+  try {
+    const result = await syncAllTablesBidirectional();
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // 13. Farm Settings & Users
 apiRouter.get('/settings', settingsControllers.getSettings);

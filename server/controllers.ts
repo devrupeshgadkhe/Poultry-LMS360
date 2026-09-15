@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { query } from './db.js';
 import crypto from 'crypto';
-import { supabaseServer } from './supabase.js';
+import { supabaseServer, syncRecordToSupabase, deleteRecordFromSupabase } from './supabase.js';
 
 export async function getAverageLandedCost(inventoryId: number | null): Promise<number> {
   if (!inventoryId) return 0;
@@ -438,13 +438,35 @@ export const dailyLogsControllers = {
   async create(req: Request, res: Response) {
     let {
       FlockId, FeedItemId, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, Notes, DailyAverageWeight, WaterConsumed,
-      BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, CustomEggPrice, CustomBirdPrice
+      BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, CustomEggPrice, CustomBirdPrice, FarmId
     } = req.body;
+
+    const numVal = (v: any) => (v === '' || v === null || v === undefined || isNaN(Number(v)) ? 0 : Number(v));
+    FeedConsumedKg = numVal(FeedConsumedKg);
+    MortalityCount = numVal(MortalityCount);
+    EggsCollected = numVal(EggsCollected);
+    DamagedEggsCollected = numVal(DamagedEggsCollected);
+    DailyAverageWeight = numVal(DailyAverageWeight);
+    WaterConsumed = numVal(WaterConsumed);
+    BirdsEatenBySelf = numVal(BirdsEatenBySelf);
+    BirdsEatenValue = numVal(BirdsEatenValue);
+    EggsGifted = numVal(EggsGifted);
+    EggsGiftedValue = numVal(EggsGiftedValue);
+    CustomEggPrice = CustomEggPrice ? numVal(CustomEggPrice) : null;
+    CustomBirdPrice = CustomBirdPrice ? numVal(CustomBirdPrice) : null;
+
+    let createdLogId = 0;
+    let targetFarmId = FarmId || Number(req.headers['x-farm-id']) || 1;
+
     try {
       await query.serializeTransaction(async () => {
         // Validation & Stocks fallback
         let feedUnitPrice = 0;
         let matchedFeedItem = null;
+
+        const flock = await query.get('SELECT * FROM Flocks WHERE Id = ?', [FlockId]);
+        if (!flock) throw new Error('Flock does not exist');
+        if (flock.FarmId) targetFarmId = flock.FarmId;
 
         if (FeedItemId) {
           matchedFeedItem = await query.get('SELECT * FROM Inventories WHERE Id = ?', [FeedItemId]);
@@ -454,9 +476,9 @@ export const dailyLogsControllers = {
           if (!matchedFeedItem) {
             // Auto create Default Feed item
             const insertFeed = await query.run(`
-              INSERT INTO Inventories (ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
-              VALUES ('Default Feed', 'Feed', 'Kg', 30.00, 0, 0, 1, 0, 'Auto-created default feed for historical tracking')
-            `);
+              INSERT INTO Inventories (FarmId, ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
+              VALUES (?, 'Default Feed', 'Feed', 'Kg', 30.00, 0, 0, 1, 0, 'Auto-created default feed for historical tracking')
+            `, [targetFarmId]);
             matchedFeedItem = { Id: insertFeed.lastID, ItemName: 'Default Feed', UnitPrice: 30.00, CurrentStock: 0 };
           }
           FeedItemId = matchedFeedItem.Id;
@@ -469,26 +491,23 @@ export const dailyLogsControllers = {
         }
 
         const calculatedFeedCost = FeedConsumedKg * feedUnitPrice;
-
-        const flock = await query.get('SELECT * FROM Flocks WHERE Id = ?', [FlockId]);
-        if (!flock) throw new Error('Flock does not exist');
-
         const reqBirds = (MortalityCount || 0) + (BirdsEatenBySelf || 0);
 
         // Insert new daily log
         const dailyBirdCost = flock.PerBirdPurchasePrice || 0;
         const result = await query.run(`
           INSERT INTO DailyLogs (
-            FlockId, FeedItemId, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, FeedCost, DailyBirdCost, Notes, DailyAverageWeight, WaterConsumed,
+            FarmId, FlockId, FeedItemId, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, FeedCost, DailyBirdCost, Notes, DailyAverageWeight, WaterConsumed,
             BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, CustomEggPrice, CustomBirdPrice
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
-          FlockId, FeedItemId || null, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, calculatedFeedCost, dailyBirdCost, Notes || '', DailyAverageWeight || 0, WaterConsumed || 0,
-          BirdsEatenBySelf || 0, BirdsEatenValue || 0, EggsGifted || 0, EggsGiftedValue || 0, CustomEggPrice || null, CustomBirdPrice || null
+          targetFarmId, FlockId, FeedItemId || null, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, calculatedFeedCost, dailyBirdCost, Notes || '', DailyAverageWeight, WaterConsumed,
+          BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, CustomEggPrice, CustomBirdPrice
         ]);
 
         const logId = result.lastID;
+        createdLogId = logId;
 
         // Update flock aggregates (deducting mortality AND eaten birds! Allow negative stock)
         const updatedFeedCost = (flock.TotalFeedCost || 0) + calculatedFeedCost;
@@ -506,15 +525,15 @@ export const dailyLogsControllers = {
         await query.run(`
           UPDATE EggInventories 
           SET Quantity = Quantity + ? 
-          WHERE GradeOrType = 'Fresh Eggs'
-        `, [netFreshEggs]);
+          WHERE GradeOrType = 'Fresh Eggs' AND (FarmId = ? OR FarmId IS NULL)
+        `, [netFreshEggs, targetFarmId]);
 
         if (DamagedEggsCollected > 0) {
           await query.run(`
             UPDATE EggInventories 
             SET Quantity = Quantity + ? 
-            WHERE GradeOrType = 'Damaged/Waste Eggs'
-          `, [DamagedEggsCollected]);
+            WHERE GradeOrType = 'Damaged/Waste Eggs' AND (FarmId = ? OR FarmId IS NULL)
+          `, [DamagedEggsCollected, targetFarmId]);
         }
 
         // Ledger Record for Feed Consumption
@@ -524,9 +543,9 @@ export const dailyLogsControllers = {
           const feedName = matchedFeedItem ? matchedFeedItem.ItemName : 'Feed';
 
           await query.run(`
-            INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-            VALUES (?, ?, 'Expense', ?, ?, ?)
-          `, [LogDate, calculatedFeedCost, catId, `[DailyLog #${logId}] Consume ${FeedConsumedKg} Kg of ${feedName}`, FlockId]);
+            INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+            VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+          `, [targetFarmId, LogDate, calculatedFeedCost, catId, `[DailyLog #${logId}] Consume ${FeedConsumedKg} Kg of ${feedName}`, FlockId]);
         }
 
         // Ledger Record for Birds Eaten By Self
@@ -534,9 +553,9 @@ export const dailyLogsControllers = {
           const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Personal Consumption'");
           const catId = catObj ? catObj.Id : 10;
           await query.run(`
-            INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-            VALUES (?, ?, 'Expense', ?, ?, ?)
-          `, [LogDate, BirdsEatenBySelf * BirdsEatenValue, catId, `[DailyLog #${logId}] Birds eaten by self: ${BirdsEatenBySelf} birds`, FlockId]);
+            INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+            VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+          `, [targetFarmId, LogDate, BirdsEatenBySelf * BirdsEatenValue, catId, `[DailyLog #${logId}] Birds eaten by self: ${BirdsEatenBySelf} birds`, FlockId]);
         }
 
         // Ledger Record for Eggs Gifted (Gifts & Donations)
@@ -544,14 +563,36 @@ export const dailyLogsControllers = {
           const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Gifts & Donations'");
           const catId = catObj ? catObj.Id : 11;
           await query.run(`
-            INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-            VALUES (?, ?, 'Expense', ?, ?, ?)
-          `, [LogDate, EggsGifted * EggsGiftedValue, catId, `[DailyLog #${logId}] Eggs gifted: ${EggsGifted} eggs`, FlockId]);
+            INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+            VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+          `, [targetFarmId, LogDate, EggsGifted * EggsGiftedValue, catId, `[DailyLog #${logId}] Eggs gifted: ${EggsGifted} eggs`, FlockId]);
         }
       });
 
+      // Synchronize newly created log to Supabase Cloud
+      syncRecordToSupabase('DailyLogs', {
+        Id: createdLogId,
+        FarmId: targetFarmId,
+        FlockId,
+        FeedItemId: FeedItemId || null,
+        FeedConsumedKg,
+        MortalityCount,
+        EggsCollected,
+        DamagedEggsCollected,
+        LogDate,
+        Notes: Notes || '',
+        DailyAverageWeight,
+        WaterConsumed,
+        BirdsEatenBySelf,
+        BirdsEatenValue,
+        EggsGifted,
+        EggsGiftedValue,
+        CustomEggPrice,
+        CustomBirdPrice
+      }).catch(e => console.warn('[Supabase DailyLogs sync] Warning:', e.message));
+
       await logAudit(req, '', 'DailyLogs', 'Create', { FlockId, LogDate }, 'SUCCESS');
-      res.json({ message: 'Daily Log added successfully' });
+      res.json({ message: 'Daily Log added successfully', id: createdLogId });
     } catch (e: any) {
       await logAudit(req, '', 'DailyLogs', 'Create', { FlockId, LogDate }, 'FAILED', e.message);
       res.status(500).json({ error: e.message });
@@ -562,12 +603,30 @@ export const dailyLogsControllers = {
     const { id } = req.params;
     let {
       FlockId, FeedItemId, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, Notes, DailyAverageWeight, WaterConsumed,
-      BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, CustomEggPrice, CustomBirdPrice
+      BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, CustomEggPrice, CustomBirdPrice, FarmId
     } = req.body;
+
+    const numVal = (v: any) => (v === '' || v === null || v === undefined || isNaN(Number(v)) ? 0 : Number(v));
+    FeedConsumedKg = numVal(FeedConsumedKg);
+    MortalityCount = numVal(MortalityCount);
+    EggsCollected = numVal(EggsCollected);
+    DamagedEggsCollected = numVal(DamagedEggsCollected);
+    DailyAverageWeight = numVal(DailyAverageWeight);
+    WaterConsumed = numVal(WaterConsumed);
+    BirdsEatenBySelf = numVal(BirdsEatenBySelf);
+    BirdsEatenValue = numVal(BirdsEatenValue);
+    EggsGifted = numVal(EggsGifted);
+    EggsGiftedValue = numVal(EggsGiftedValue);
+    CustomEggPrice = CustomEggPrice ? numVal(CustomEggPrice) : null;
+    CustomBirdPrice = CustomBirdPrice ? numVal(CustomBirdPrice) : null;
+
+    let targetFarmId = FarmId || Number(req.headers['x-farm-id']) || 1;
+
     try {
       await query.serializeTransaction(async () => {
         const oldLog = await query.get('SELECT * FROM DailyLogs WHERE Id = ?', [id]);
         if (!oldLog) throw new Error('Daily log entry not found.');
+        if (oldLog.FarmId) targetFarmId = oldLog.FarmId;
 
         // 1. Revert Old Log impacts
         if (oldLog.FeedItemId && oldLog.FeedConsumedKg > 0) {
@@ -592,20 +651,24 @@ export const dailyLogsControllers = {
         await query.run(`
           UPDATE EggInventories 
           SET Quantity = Quantity - ? 
-          WHERE GradeOrType = 'Fresh Eggs'
-        `, [oldNetFreshEggs]);
+          WHERE GradeOrType = 'Fresh Eggs' AND (FarmId = ? OR FarmId IS NULL)
+        `, [oldNetFreshEggs, targetFarmId]);
 
         if (oldLog.DamagedEggsCollected > 0) {
           await query.run(`
             UPDATE EggInventories 
             SET Quantity = Quantity - ? 
-            WHERE GradeOrType = 'Damaged/Waste Eggs'
-          `, [oldLog.DamagedEggsCollected]);
+            WHERE GradeOrType = 'Damaged/Waste Eggs' AND (FarmId = ? OR FarmId IS NULL)
+          `, [oldLog.DamagedEggsCollected, targetFarmId]);
         }
 
         // 2. Apply New Log impacts (Validation & Stocks fallback)
         let feedUnitPrice = 0;
         let matchedFeedItem = null;
+
+        const flock = await query.get('SELECT * FROM Flocks WHERE Id = ?', [FlockId]);
+        if (!flock) throw new Error('Flock does not exist');
+        if (flock.FarmId) targetFarmId = flock.FarmId;
 
         if (FeedItemId) {
           matchedFeedItem = await query.get('SELECT * FROM Inventories WHERE Id = ?', [FeedItemId]);
@@ -615,9 +678,9 @@ export const dailyLogsControllers = {
           if (!matchedFeedItem) {
             // Auto create Default Feed item
             const insertFeed = await query.run(`
-              INSERT INTO Inventories (ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
-              VALUES ('Default Feed', 'Feed', 'Kg', 30.00, 0, 0, 1, 0, 'Auto-created default feed for historical tracking')
-            `);
+              INSERT INTO Inventories (FarmId, ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
+              VALUES (?, 'Default Feed', 'Feed', 'Kg', 30.00, 0, 0, 1, 0, 'Auto-created default feed for historical tracking')
+            `, [targetFarmId]);
             matchedFeedItem = { Id: insertFeed.lastID, ItemName: 'Default Feed', UnitPrice: 30.00, CurrentStock: 0 };
           }
           FeedItemId = matchedFeedItem.Id;
@@ -630,22 +693,18 @@ export const dailyLogsControllers = {
         }
 
         const calculatedFeedCost = FeedConsumedKg * feedUnitPrice;
-
-        const flock = await query.get('SELECT * FROM Flocks WHERE Id = ?', [FlockId]);
-        if (!flock) throw new Error('Flock does not exist');
-
         const reqBirds = (MortalityCount || 0) + (BirdsEatenBySelf || 0);
 
         // Save updated values
         const dailyBirdCost = flock.PerBirdPurchasePrice || 0;
         await query.run(`
           UPDATE DailyLogs
-          SET FlockId = ?, FeedItemId = ?, FeedConsumedKg = ?, MortalityCount = ?, EggsCollected = ?, DamagedEggsCollected = ?, LogDate = ?, FeedCost = ?, DailyBirdCost = ?, Notes = ?, DailyAverageWeight = ?, WaterConsumed = ?,
+          SET FarmId = ?, FlockId = ?, FeedItemId = ?, FeedConsumedKg = ?, MortalityCount = ?, EggsCollected = ?, DamagedEggsCollected = ?, LogDate = ?, FeedCost = ?, DailyBirdCost = ?, Notes = ?, DailyAverageWeight = ?, WaterConsumed = ?,
               BirdsEatenBySelf = ?, BirdsEatenValue = ?, EggsGifted = ?, EggsGiftedValue = ?, CustomEggPrice = ?, CustomBirdPrice = ?
           WHERE Id = ?
         `, [
-          FlockId, FeedItemId || null, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, calculatedFeedCost, dailyBirdCost, Notes || '', DailyAverageWeight || 0, WaterConsumed || 0,
-          BirdsEatenBySelf || 0, BirdsEatenValue || 0, EggsGifted || 0, EggsGiftedValue || 0, CustomEggPrice || null, CustomBirdPrice || null, id
+          targetFarmId, FlockId, FeedItemId || null, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, calculatedFeedCost, dailyBirdCost, Notes || '', DailyAverageWeight, WaterConsumed,
+          BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, CustomEggPrice, CustomBirdPrice, id
         ]);
 
         // Update flock aggregates (Allow negative stock)
@@ -664,15 +723,15 @@ export const dailyLogsControllers = {
         await query.run(`
           UPDATE EggInventories 
           SET Quantity = Quantity + ? 
-          WHERE GradeOrType = 'Fresh Eggs'
-        `, [netFreshEggs]);
+          WHERE GradeOrType = 'Fresh Eggs' AND (FarmId = ? OR FarmId IS NULL)
+        `, [netFreshEggs, targetFarmId]);
 
         if (DamagedEggsCollected > 0) {
           await query.run(`
             UPDATE EggInventories 
             SET Quantity = Quantity + ? 
-            WHERE GradeOrType = 'Damaged/Waste Eggs'
-          `, [DamagedEggsCollected]);
+            WHERE GradeOrType = 'Damaged/Waste Eggs' AND (FarmId = ? OR FarmId IS NULL)
+          `, [DamagedEggsCollected, targetFarmId]);
         }
 
         // Ledger Record for Feed Consumption
@@ -682,9 +741,9 @@ export const dailyLogsControllers = {
           const feedName = matchedFeedItem ? matchedFeedItem.ItemName : 'Feed';
 
           await query.run(`
-            INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-            VALUES (?, ?, 'Expense', ?, ?, ?)
-          `, [LogDate, calculatedFeedCost, catId, `[DailyLog #${id}] Consume ${FeedConsumedKg} Kg of ${feedName}`, FlockId]);
+            INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+            VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+          `, [targetFarmId, LogDate, calculatedFeedCost, catId, `[DailyLog #${id}] Consume ${FeedConsumedKg} Kg of ${feedName}`, FlockId]);
         }
 
         // Ledger Record for Birds Eaten By Self
@@ -692,9 +751,9 @@ export const dailyLogsControllers = {
           const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Personal Consumption'");
           const catId = catObj ? catObj.Id : 10;
           await query.run(`
-            INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-            VALUES (?, ?, 'Expense', ?, ?, ?)
-          `, [LogDate, BirdsEatenBySelf * BirdsEatenValue, catId, `[DailyLog #${id}] Birds eaten by self: ${BirdsEatenBySelf} birds`, FlockId]);
+            INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+            VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+          `, [targetFarmId, LogDate, BirdsEatenBySelf * BirdsEatenValue, catId, `[DailyLog #${id}] Birds eaten by self: ${BirdsEatenBySelf} birds`, FlockId]);
         }
 
         // Ledger Record for Eggs Gifted (Gifts & Donations)
@@ -702,11 +761,33 @@ export const dailyLogsControllers = {
           const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Gifts & Donations'");
           const catId = catObj ? catObj.Id : 11;
           await query.run(`
-            INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-            VALUES (?, ?, 'Expense', ?, ?, ?)
-          `, [LogDate, EggsGifted * EggsGiftedValue, catId, `[DailyLog #${id}] Eggs gifted: ${EggsGifted} eggs`, FlockId]);
+            INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+            VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+          `, [targetFarmId, LogDate, EggsGifted * EggsGiftedValue, catId, `[DailyLog #${id}] Eggs gifted: ${EggsGifted} eggs`, FlockId]);
         }
       });
+
+      // Synchronize updated log to Supabase Cloud
+      syncRecordToSupabase('DailyLogs', {
+        Id: Number(id),
+        FarmId: targetFarmId,
+        FlockId,
+        FeedItemId: FeedItemId || null,
+        FeedConsumedKg,
+        MortalityCount,
+        EggsCollected,
+        DamagedEggsCollected,
+        LogDate,
+        Notes: Notes || '',
+        DailyAverageWeight,
+        WaterConsumed,
+        BirdsEatenBySelf,
+        BirdsEatenValue,
+        EggsGifted,
+        EggsGiftedValue,
+        CustomEggPrice,
+        CustomBirdPrice
+      }).catch(e => console.warn('[Supabase DailyLogs update sync] Warning:', e.message));
 
       await logAudit(req, '', 'DailyLogs', 'Update', { id, FlockId, LogDate }, 'SUCCESS');
       res.json({ message: 'Daily Log updated successfully' });
@@ -719,9 +800,11 @@ export const dailyLogsControllers = {
   async delete(req: Request, res: Response) {
     const { id } = req.params;
     try {
+      let farmIdToDelete = 1;
       await query.serializeTransaction(async () => {
         const log = await query.get('SELECT * FROM DailyLogs WHERE Id = ?', [id]);
         if (!log) throw new Error('Daily log entry not found.');
+        if (log.FarmId) farmIdToDelete = log.FarmId;
 
         // Revert Feed stocks
         if (log.FeedItemId && log.FeedConsumedKg > 0) {
@@ -746,21 +829,25 @@ export const dailyLogsControllers = {
         await query.run(`
           UPDATE EggInventories 
           SET Quantity = Quantity - ? 
-          WHERE GradeOrType = 'Fresh Eggs'
-        `, [netFreshEggs]);
+          WHERE GradeOrType = 'Fresh Eggs' AND (FarmId = ? OR FarmId IS NULL)
+        `, [netFreshEggs, farmIdToDelete]);
 
         if (log.DamagedEggsCollected > 0) {
           await query.run(`
             UPDATE EggInventories 
             SET Quantity = Quantity - ? 
-            WHERE GradeOrType = 'Damaged/Waste Eggs'
-          `, [log.DamagedEggsCollected]);
+            WHERE GradeOrType = 'Damaged/Waste Eggs' AND (FarmId = ? OR FarmId IS NULL)
+          `, [log.DamagedEggsCollected, farmIdToDelete]);
         }
 
         // Delete actual log
         await query.run('DELETE FROM DailyLogs WHERE Id = ?', [id]);
         await query.run("DELETE FROM FinancialTransactions WHERE Notes LIKE ?", [`[DailyLog #${id}]%`]);
       });
+
+      // Synchronize deletion to Supabase Cloud
+      deleteRecordFromSupabase('DailyLogs', Number(id), farmIdToDelete)
+        .catch(e => console.warn('[Supabase DailyLogs delete sync] Warning:', e.message));
 
       await logAudit(req, '', 'DailyLogs', 'Delete', { id }, 'SUCCESS');
       res.json({ message: 'Daily Log deleted and stocks reverted successfully' });

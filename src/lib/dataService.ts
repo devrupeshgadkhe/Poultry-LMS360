@@ -22,6 +22,28 @@ import {
  * Group 1: Core Farm Operations (Multi-Tenant by FarmId)
  */
 
+/**
+ * Synchronize records saved on this device to the local backend / SQLite store
+ * to guarantee that offline copies, local reporting, and other local sessions are updated.
+ */
+export async function syncToLocalBackend(table: string, action: 'upsert' | 'delete', record: any): Promise<void> {
+  try {
+    if (!record) return;
+    const farmId = record?.FarmId || Number(localStorage.getItem('active_farm_id')) || 1;
+    await fetch('/api/sync/record', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Farm-Id': String(farmId)
+      },
+      body: JSON.stringify({ table, action, record })
+    });
+  } catch (err) {
+    // Non-blocking background local sync
+    console.debug('[syncToLocalBackend] Local sync notification status:', err);
+  }
+}
+
 // ==============================================================================
 // 1. FLOCKS SERVICE
 // ==============================================================================
@@ -348,7 +370,48 @@ export const dailyLogService = {
       }
     }
 
+    // Mirror to local SQLite
+    syncToLocalBackend('DailyLogs', 'upsert', createdLog);
+
     return createdLog;
+  },
+
+  /**
+   * Update an existing daily log and sync to local backend
+   */
+  async updateDailyLog(farmId: number, logId: number, logData: Partial<DailyLog>): Promise<DailyLog> {
+    const payload = {
+      ...logData,
+      FarmId: farmId
+    };
+
+    const { data: updatedLog, error: logErr } = await supabase
+      .from('DailyLogs')
+      .update(payload)
+      .eq('Id', logId)
+      .eq('FarmId', farmId)
+      .select()
+      .single();
+
+    if (logErr) {
+      console.error('[dailyLogService.updateDailyLog] Supabase Error, fallback to local backend:', logErr.message);
+      const res = await fetch(`/api/daily_logs/${logId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Farm-Id': String(farmId)
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        throw logErr;
+      }
+      return (await res.json()) as DailyLog;
+    }
+
+    // Mirror to local SQLite
+    syncToLocalBackend('DailyLogs', 'upsert', updatedLog);
+    return updatedLog;
   },
 
   /**
@@ -363,7 +426,12 @@ export const dailyLogService = {
 
     if (error) {
       console.error('[dailyLogService.deleteDailyLog] Error:', error.message);
-      throw error;
+      await fetch(`/api/daily_logs/${logId}`, {
+        method: 'DELETE',
+        headers: { 'X-Farm-Id': String(farmId) }
+      });
+    } else {
+      syncToLocalBackend('DailyLogs', 'delete', { Id: logId, FarmId: farmId });
     }
   }
 };

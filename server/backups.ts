@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
-import { query, dbPath } from './db.js';
+import { query, dbPath, initializeDatabase } from './db.js';
+import { supabaseServer } from './supabase.js';
 
 /**
  * Encryption helpers for database backups.
@@ -23,12 +24,43 @@ export function decrypt(encryptedText: string, key: string): string {
     throw new Error('Invalid encrypted backup format (missing IV separator)');
   }
   const iv = Buffer.from(parts[0], 'hex');
-  const encrypted = parts[1];
+  const encrypted = parts[1].trim();
   const derivedKey = crypto.createHash('sha256').update(key).digest();
-  const decipher = crypto.createDecipheriv('aes-256-cbc', derivedKey, iv);
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
+
+  // 1. Try standard decryption with PKCS7 padding
+  try {
+    const decipher = crypto.createDecipheriv('aes-256-cbc', derivedKey, iv);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (standardErr: any) {
+    // 2. Resilient fallback for block-aligned or slightly clipped payloads (e.g. manual copy-paste transfers)
+    try {
+      const remainder = encrypted.length % 32;
+      const validHexLen = encrypted.length - remainder;
+      if (validHexLen > 0) {
+        const cBuf = Buffer.from(encrypted.slice(0, validHexLen), 'hex');
+        const decipher2 = crypto.createDecipheriv('aes-256-cbc', derivedKey, iv);
+        decipher2.setAutoPadding(false);
+        let recovered = Buffer.concat([decipher2.update(cBuf), decipher2.final()]).toString('utf8');
+        recovered = recovered.replace(/[\x00-\x1F\x7F]+$/, '');
+
+        // If JSON was clipped mid-stream, repair tables array and root object
+        if (recovered.includes('"tables":') && !recovered.trim().endsWith('}')) {
+          const lastObjEnd = recovered.lastIndexOf('},');
+          if (lastObjEnd > 0) {
+            const healed = recovered.slice(0, lastObjEnd + 1) + ']}]}';
+            try {
+              JSON.parse(healed);
+              return healed;
+            } catch {}
+          }
+        }
+        return recovered;
+      }
+    } catch {}
+    throw standardErr;
+  }
 }
 
 export function getEncryptedBackup(backupObj: any): { encrypted: boolean; data: string } {
@@ -88,10 +120,19 @@ export async function getBackupData(): Promise<BackupJson> {
   };
 }
 
+const MULTI_TENANT_TABLES = [
+  'Flocks', 'DailyLogs', 'Inventories', 'EggInventories', 'Vaccinations',
+  'Customers', 'Suppliers', 'Purchases', 'PurchaseItems', 'PurchaseExtraExpenses',
+  'PurchaseReturns', 'PurchaseReturnItems', 'Sales', 'SaleItems', 'SaleReturns',
+  'SaleReturnItems', 'FoodRecipes', 'RecipeIngredients', 'FeedProductionLogs',
+  'FinancialTransactions', 'TransactionCategories', 'Staff', 'Attendance', 'Payroll', 'Users'
+];
+
 /**
  * Restores the entire database from a parsed backup JSON (handles encrypted or plain format).
+ * Assigns data to whichever farm is currently active/logged-in, and synchronizes to Supabase Cloud.
  */
-export async function restoreBackupData(backup: any): Promise<void> {
+export async function restoreBackupData(backup: any, targetFarmId?: number): Promise<void> {
   let finalBackup = backup;
   
   if (backup && backup.encrypted === true && typeof backup.data === 'string') {
@@ -109,6 +150,7 @@ export async function restoreBackupData(backup: any): Promise<void> {
   }
 
   const backupToRestore: BackupJson = finalBackup;
+  const assignedFarmId = Number(targetFarmId) || 1;
 
   // 1. Turn off foreign keys constraint checking temporarily
   await query.run('PRAGMA foreign_keys = OFF');
@@ -119,28 +161,61 @@ export async function restoreBackupData(backup: any): Promise<void> {
       await query.run(`DROP TABLE IF EXISTS \`${table.name}\``);
     }
 
-    // 3. Recreate all table structures
+    // 3. Recreate all table structures from the backup schema
     for (const table of backupToRestore.tables) {
       if (table.schema) {
         await query.run(table.schema);
       }
     }
 
-    // 4. Populate rows inside a transaction for atomic speed & stability
+    // 4. Ensure all multi-tenant tables have the FarmId column
+    for (const tblName of MULTI_TENANT_TABLES) {
+      try {
+        const cols = await query.all(`PRAGMA table_info(\`${tblName}\`)`);
+        if (cols && cols.length > 0) {
+          const hasFarmId = cols.some((c: any) => c.name === 'FarmId');
+          if (!hasFarmId) {
+            await query.run(`ALTER TABLE \`${tblName}\` ADD COLUMN FarmId INTEGER DEFAULT 1`);
+          }
+        }
+      } catch (colErr) {
+        // Table might not exist in this backup version
+      }
+    }
+
+    // 5. Populate rows inside a transaction for atomic speed & stability
     await query.run('BEGIN TRANSACTION');
     try {
       for (const table of backupToRestore.tables) {
         if (table.rows && table.rows.length > 0) {
-          for (const row of table.rows) {
-            const keys = Object.keys(row);
+          const tableCols = await query.all(`PRAGMA table_info(\`${table.name}\`)`);
+          const validColNames = new Set(tableCols.map((c: any) => c.name));
+          const isMultiTenant = MULTI_TENANT_TABLES.includes(table.name);
+
+          for (const rawRow of table.rows) {
+            const row = { ...rawRow };
+            // Assign active FarmId to the record
+            if (isMultiTenant && validColNames.has('FarmId')) {
+              row.FarmId = assignedFarmId;
+            }
+
+            // Only insert columns that exist in the physical table
+            const filteredRow: Record<string, any> = {};
+            for (const [k, v] of Object.entries(row)) {
+              if (validColNames.has(k)) {
+                filteredRow[k] = v;
+              }
+            }
+
+            const keys = Object.keys(filteredRow);
             if (keys.length === 0) continue;
             
             const columns = keys.map(k => `\`${k}\``).join(', ');
             const placeholders = keys.map(() => '?').join(', ');
-            const values = keys.map(k => row[k]);
+            const values = keys.map(k => filteredRow[k]);
             
             await query.run(
-              `INSERT INTO \`${table.name}\` (${columns}) VALUES (${placeholders})`,
+              `INSERT OR REPLACE INTO \`${table.name}\` (${columns}) VALUES (${placeholders})`,
               values
             );
           }
@@ -156,8 +231,67 @@ export async function restoreBackupData(backup: any): Promise<void> {
       throw insertErr;
     }
 
+    // 6. Ensure default EggInventories exist for the assigned farm
+    try {
+      const freshEggs = await query.get("SELECT Id FROM EggInventories WHERE FarmId = ? AND GradeOrType = 'Fresh Eggs'", [assignedFarmId]);
+      if (!freshEggs) {
+        await query.run("INSERT INTO EggInventories (FarmId, GradeOrType, Quantity, UnitPrice, Notes) VALUES (?, 'Fresh Eggs', 0, 5.0, 'Default Fresh Eggs')", [assignedFarmId]);
+      }
+      const damagedEggs = await query.get("SELECT Id FROM EggInventories WHERE FarmId = ? AND GradeOrType = 'Damaged/Waste Eggs'", [assignedFarmId]);
+      if (!damagedEggs) {
+        await query.run("INSERT INTO EggInventories (FarmId, GradeOrType, Quantity, UnitPrice, Notes) VALUES (?, 'Damaged/Waste Eggs', 0, 0.0, 'Default Damaged Eggs')", [assignedFarmId]);
+      }
+    } catch (eggErr) {
+      console.warn('[Restore] Egg inventory check warning:', eggErr);
+    }
+
+    // 7. Ensure modern tables and columns exist across the database
+    try {
+      await initializeDatabase();
+    } catch (initErr: any) {
+      console.warn('[Restore] Database initialization warning:', initErr.message);
+    }
+
+    // 8. Update FarmSettings & Farms table if FarmSettings was restored
+    try {
+      const farmSettingsTable = backupToRestore.tables.find(t => t.name === 'FarmSettings');
+      if (farmSettingsTable && farmSettingsTable.rows && farmSettingsTable.rows.length > 0) {
+        const s = farmSettingsTable.rows[0];
+        if (s && s.FarmName) {
+          await query.run('UPDATE Farms SET FarmName = ? WHERE Id = ?', [s.FarmName, assignedFarmId]);
+          if (supabaseServer) {
+            await supabaseServer.from('Farms').update({ FarmName: s.FarmName }).eq('Id', assignedFarmId);
+          }
+        }
+      }
+    } catch (farmErr: any) {
+      console.warn('[Restore] Farm sync warning:', farmErr.message);
+    }
+
+    // 9. Sync the restored data to Supabase Cloud so all devices see the restored data
+    if (supabaseServer) {
+      try {
+        console.log(`[Restore] Syncing restored tables to Supabase Cloud for Farm #${assignedFarmId}...`);
+        for (const table of backupToRestore.tables) {
+          if (MULTI_TENANT_TABLES.includes(table.name) && table.rows && table.rows.length > 0) {
+            const rowsToPush = table.rows.map((r: any) => ({
+              ...r,
+              FarmId: assignedFarmId
+            }));
+            for (let i = 0; i < rowsToPush.length; i += 50) {
+              const chunk = rowsToPush.slice(i, i + 50);
+              await supabaseServer.from(table.name).upsert(chunk, { onConflict: 'Id' });
+            }
+          }
+        }
+        console.log(`[Restore] Successfully synced restored data to Supabase Cloud!`);
+      } catch (cloudErr: any) {
+        console.warn('[Restore] Supabase Cloud sync warning:', cloudErr.message);
+      }
+    }
+
   } finally {
-    // 5. Restore foreign keys checking
+    // Restore foreign keys checking
     await query.run('PRAGMA foreign_keys = ON');
   }
 }
@@ -544,7 +678,8 @@ export const backupControllers = {
   async restoreBackup(req: any, res: any) {
     try {
       const backup = req.body;
-      await restoreBackupData(backup);
+      const targetFarmId = req.body?.farmId || req.headers['x-farm-id'] || 1;
+      await restoreBackupData(backup, Number(targetFarmId));
       res.json({ message: 'System database restored successfully.' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -617,7 +752,8 @@ export const backupControllers = {
 
       const raw = fs.readFileSync(filepath, 'utf8');
       const backup = JSON.parse(raw);
-      await restoreBackupData(backup);
+      const targetFarmId = req.body?.farmId || req.headers['x-farm-id'] || 1;
+      await restoreBackupData(backup, Number(targetFarmId));
       res.json({ message: 'System database restored successfully from local snapshot.' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

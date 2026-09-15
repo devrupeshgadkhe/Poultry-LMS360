@@ -234,19 +234,38 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
     
     try {
       setSubmitting(true);
+      const parseNum = (val: any) => (val === '' || val === null || val === undefined || isNaN(Number(val)) ? 0 : Number(val));
+
       const payload = {
         ...newLog,
+        FarmId: farmId,
         FlockId: parseInt(newLog.FlockId),
-        FeedItemId: newLog.FeedItemId ? parseInt(newLog.FeedItemId) : null
+        FeedItemId: newLog.FeedItemId ? parseInt(newLog.FeedItemId) : null,
+        FeedConsumedKg: parseNum(newLog.FeedConsumedKg),
+        MortalityCount: parseNum(newLog.MortalityCount),
+        EggsCollected: parseNum(newLog.EggsCollected),
+        DamagedEggsCollected: parseNum(newLog.DamagedEggsCollected),
+        DailyAverageWeight: parseNum(newLog.DailyAverageWeight),
+        WaterConsumed: parseNum(newLog.WaterConsumed),
+        BirdsEatenBySelf: parseNum(newLog.BirdsEatenBySelf),
+        BirdsEatenValue: parseNum(newLog.BirdsEatenValue),
+        EggsGifted: parseNum(newLog.EggsGifted),
+        EggsGiftedValue: parseNum(newLog.EggsGiftedValue),
+        CustomEggPrice: (newLog as any).CustomEggPrice !== '' && (newLog as any).CustomEggPrice !== null && (newLog as any).CustomEggPrice !== undefined ? parseNum((newLog as any).CustomEggPrice) : null,
+        CustomBirdPrice: (newLog as any).CustomBirdPrice !== '' && (newLog as any).CustomBirdPrice !== null && (newLog as any).CustomBirdPrice !== undefined ? parseNum((newLog as any).CustomBirdPrice) : null,
       };
 
       try {
-        await dailyLogService.createDailyLog(farmId, payload);
+        if (editingLogId) {
+          await dailyLogService.updateDailyLog(farmId, editingLogId, payload);
+        } else {
+          await dailyLogService.createDailyLog(farmId, payload);
+        }
         cancelForm();
         fetchLogs();
         fetchOptions();
       } catch (cloudErr: any) {
-        console.error('Supabase createDailyLog error, fallback to local:', cloudErr);
+        console.error('Daily log service error, fallback to local backend:', cloudErr);
         const url = editingLogId ? `/api/daily_logs/${editingLogId}` : '/api/daily_logs';
         const method = editingLogId ? 'PUT' : 'POST';
 
@@ -254,6 +273,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
           method,
           headers: {
             'Content-Type': 'application/json',
+            'X-Farm-Id': String(farmId),
             'X-User-Email': localStorage.getItem('userEmail') || 'admin'
           },
           body: JSON.stringify(payload)
@@ -434,7 +454,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Hen House Mortality Count</label>
               <input
                 type="number"
-                required
+                placeholder="0"
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50/50 text-red-500 font-semibold"
                 value={newLog.MortalityCount}
                 onChange={e => {
@@ -449,7 +469,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
               <input
                 type="number"
                 step="any"
-                required
+                placeholder="0"
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50/50 font-semibold text-blue-600"
                 value={newLog.WaterConsumed}
                 onChange={e => {
@@ -464,7 +484,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
               <input
                 type="number"
                 step="any"
-                required
+                placeholder="0"
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50/50 font-semibold text-indigo-600"
                 value={newLog.DailyAverageWeight}
                 onChange={e => {
@@ -487,7 +507,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
                   <label className="text-[10px] text-slate-400 font-semibold uppercase">Eggs Count</label>
                   <input
                     type="number"
-                    required
+                    placeholder="0"
                     className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm bg-white"
                     value={newLog.EggsCollected}
                     onChange={e => {
@@ -504,6 +524,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
                   <input
                     type="number"
                     step="any"
+                    placeholder="0"
                     className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm bg-white"
                     value={traysInput}
                     onChange={e => {
@@ -516,7 +537,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
                 </div>
               </div>
               <div className="text-[10px] text-slate-400 font-mono mt-1 text-right">
-                = {Math.floor(newLog.EggsCollected / 30)} Trays & {newLog.EggsCollected % 30} Eggs
+                = {Math.floor((Number(newLog.EggsCollected) || 0) / 30)} Trays & {(Number(newLog.EggsCollected) || 0) % 30} Eggs
               </div>
             </div>
 
@@ -530,7 +551,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
                   <label className="text-[10px] text-slate-400 font-semibold uppercase">Eggs Count</label>
                   <input
                     type="number"
-                    required
+                    placeholder="0"
                     className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm bg-white"
                     value={newLog.DamagedEggsCollected}
                     onChange={e => {
@@ -547,6 +568,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
                   <input
                     type="number"
                     step="any"
+                    placeholder="0"
                     className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm bg-white"
                     value={damagedTraysInput}
                     onChange={e => {
@@ -559,7 +581,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
                 </div>
               </div>
               <div className="text-[10px] text-slate-400 font-mono mt-1 text-right">
-                = {Math.floor(newLog.DamagedEggsCollected / 30)} Trays & {newLog.DamagedEggsCollected % 30} Eggs
+                = {Math.floor((Number(newLog.DamagedEggsCollected) || 0) / 30)} Trays & {(Number(newLog.DamagedEggsCollected) || 0) % 30} Eggs
               </div>
             </div>
           </div>
