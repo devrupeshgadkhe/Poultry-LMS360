@@ -39,7 +39,7 @@ import {
 } from 'recharts';
 import { Language, translations } from '../translations';
 import { useFarm } from '../context/FarmContext';
-import { reportsService } from '../lib/dataService';
+import { reportsService, settingsService } from '../lib/dataService';
 
 const reportTranslations: Record<Language, any> = {
   en: {
@@ -115,6 +115,13 @@ export default function Reports({ currentLanguage }: ReportsProps) {
           LogoUrl: ''
         });
       }
+
+      // Load settings with logo for invoice / statement printing
+      settingsService.getSettings(farmId).then((st: any) => {
+        if (st && st.FarmName) {
+          setFarmSettings(st);
+        }
+      }).catch(() => {});
 
       const json = await reportsService.getAllReportData(farmId);
       setData(json);

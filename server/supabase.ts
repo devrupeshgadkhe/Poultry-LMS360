@@ -454,7 +454,37 @@ export async function syncSupabaseToLocal() {
       console.log(`[Supabase Sync] Successfully synchronized ${farms.length} farms from Supabase.`);
     }
 
-    // 2. Sync Users
+    // 2. Sync FarmSettings
+    const { data: farmSettingsList } = await supabaseServer.from('FarmSettings').select('*');
+    if (farmSettingsList && farmSettingsList.length > 0) {
+      for (const fs of farmSettingsList) {
+        const fId = fs.FarmId || fs.Id || 1;
+        const localFs = await query.get('SELECT Id FROM FarmSettings WHERE FarmId = ?', [fId]);
+        if (localFs) {
+          await query.run(`
+            UPDATE FarmSettings
+            SET FarmName = ?, Address = ?, Phone = ?, Email = ?, Website = ?,
+                LogoUrl = COALESCE(?, LogoUrl), IsGoogleDriveEnabled = ?
+            WHERE FarmId = ?
+          `, [
+            fs.FarmName || '', fs.Address || '', fs.Phone || '', fs.Email || '', fs.Website || '',
+            fs.LogoUrl, fs.IsGoogleDriveEnabled || 0,
+            fId
+          ]);
+        } else {
+          await query.run(`
+            INSERT INTO FarmSettings (FarmId, FarmName, Address, Phone, Email, Website, LogoUrl, IsGoogleDriveEnabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `, [
+            fId, fs.FarmName || '', fs.Address || '', fs.Phone || '', fs.Email || '', fs.Website || '',
+            fs.LogoUrl || null, fs.IsGoogleDriveEnabled || 0
+          ]);
+        }
+      }
+      console.log(`[Supabase Sync] Successfully synchronized ${farmSettingsList.length} farm settings from Supabase.`);
+    }
+
+    // 3. Sync Users
     const { data: users } = await supabaseServer.from('Users').select('*');
     if (users && users.length > 0) {
       for (const u of users) {

@@ -28,6 +28,7 @@ import {
   Phone
 } from 'lucide-react';
 import { Language, translations } from '../translations';
+import { useFarm } from '../context/FarmContext';
 
 interface FarmSettings {
   Id: number;
@@ -85,8 +86,15 @@ const MODULE_PERMISSIONS_MATRIX = [
 export default function SettingsAudit({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
   const t = translations[currentLanguage];
 
+  const { currentFarm, farms, switchFarm, refreshFarms } = useFarm();
   // Active user roles (checking self Role inside localStorage or cookies)
   const myRole = localStorage.getItem('userRole') || 'Worker';
+  const userFarmId = Number(localStorage.getItem('userFarmId')) || (currentFarm?.Id || 1);
+
+  // In developer login, allow switching farms to configure any farm's settings;
+  // in farm login (Admin/Staff), lock to userFarmId or currentFarm.Id
+  const initialFarmId = myRole === 'Developer' ? (currentFarm?.Id || 1) : userFarmId;
+  const [selectedFarmId, setSelectedFarmId] = useState<number>(initialFarmId);
 
   // Farm settings states
   const [farmSettings, setFarmSettings] = useState<FarmSettings>({
@@ -107,6 +115,13 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync selectedFarmId when currentFarm changes globally
+  useEffect(() => {
+    if (myRole === 'Developer' && currentFarm?.Id && currentFarm.Id !== selectedFarmId) {
+      setSelectedFarmId(currentFarm.Id);
+    }
+  }, [currentFarm?.Id, myRole]);
 
   // User management states
   const [users, setUsers] = useState<UserOperator[]>([]);
@@ -139,11 +154,16 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
   // Biological updates state
   const [syncingAges, setSyncingAges] = useState(false);
 
-  // Standard loads
-  const loadData = async () => {
+  // Standard loads for selected farm
+  const loadData = async (targetFarmId = selectedFarmId) => {
     try {
-      // 1. Fetch settings
-      const settingsRes = await fetch('/api/settings');
+      setSettingsLoading(true);
+      // 1. Fetch settings for the specified targetFarmId
+      const settingsRes = await fetch(`/api/settings?farmId=${targetFarmId}`, {
+        headers: {
+          'x-farm-id': String(targetFarmId)
+        }
+      });
       if (settingsRes.ok) {
         const data = await settingsRes.json();
         if (data) {
@@ -153,24 +173,37 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
       }
 
       // 2. Fetch users
-      const usersRes = await fetch('/api/users');
+      const usersRes = await fetch('/api/users', {
+        headers: {
+          'x-farm-id': String(targetFarmId)
+        }
+      });
       if (usersRes.ok) {
         const data = await usersRes.json();
         setUsers(data);
       }
 
       // 3. Fetch logs
-      fetchAuditLogs();
+      fetchAuditLogs(targetFarmId);
     } catch (e) {
       console.error('Failed to load settings module dependencies:', e);
+    } finally {
+      setSettingsLoading(false);
     }
   };
 
-  const fetchAuditLogs = async () => {
+  const fetchAuditLogs = async (targetFarmId = selectedFarmId) => {
     setAuditLoading(true);
     try {
-      const queryParams = new URLSearchParams(auditFilters).toString();
-      const logsRes = await fetch(`/api/audit_logs_filtered?${queryParams}`);
+      const queryParams = new URLSearchParams({
+        ...auditFilters,
+        farmId: String(targetFarmId)
+      }).toString();
+      const logsRes = await fetch(`/api/audit_logs_filtered?${queryParams}`, {
+        headers: {
+          'x-farm-id': String(targetFarmId)
+        }
+      });
       if (logsRes.ok) {
         const data = await logsRes.json();
         setAuditLogs(data);
@@ -183,8 +216,8 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    loadData(selectedFarmId);
+  }, [selectedFarmId]);
 
   const handleSettingsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,13 +228,20 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(farmSettings)
+        headers: {
+          'Content-Type': 'application/json',
+          'x-farm-id': String(selectedFarmId)
+        },
+        body: JSON.stringify({
+          ...farmSettings,
+          FarmId: selectedFarmId
+        })
       });
       const resData = await res.json();
       if (res.ok) {
-        setSettingsSuccess('Dynamic corporate credentials saved successfully');
+        setSettingsSuccess(`Farm details saved in Supabase and locally for ${resData.settings?.FarmName || farmSettings.FarmName}`);
         setFarmSettings(resData.settings);
+        if (refreshFarms) await refreshFarms();
       } else {
         setSettingsError(resData.error || 'Server rejected changes');
       }
@@ -224,22 +264,28 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
     const reader = new FileReader();
     reader.onload = async () => {
       const resultStr = reader.result as string;
-      const base64Content = resultStr.split(',')[1];
+      const base64Content = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
       try {
         setSettingsLoading(true);
         const res = await fetch('/api/settings/logo', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-farm-id': String(selectedFarmId)
+          },
           body: JSON.stringify({
             imageBase64: base64Content,
-            mimeType: file.type
+            dataUrl: resultStr,
+            mimeType: file.type,
+            FarmId: selectedFarmId
           })
         });
         const data = await res.json();
         if (res.ok) {
           setLogoPreview(data.logoUrl);
           setFarmSettings(prev => ({ ...prev, LogoUrl: data.logoUrl }));
-          setSettingsSuccess('Corporate business logo processed and overwritten on storage.');
+          setSettingsSuccess('Farm brand logo successfully saved in Supabase and updated.');
+          if (refreshFarms) await refreshFarms();
         } else {
           setSettingsError(data.error || 'Logo processing failed');
         }
@@ -255,12 +301,17 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
   const handleTriggerAgeSync = async () => {
     setSyncingAges(true);
     try {
-      const res = await fetch('/api/settings/sync-ages', { method: 'POST' });
+      const res = await fetch('/api/settings/sync-ages', {
+        method: 'POST',
+        headers: {
+          'x-farm-id': String(selectedFarmId)
+        }
+      });
       const data = await res.json();
       if (res.ok) {
         alert(data.message || 'System flock ages updated successfully.');
         // Refresh local settings to see latest timestamp
-        loadData();
+        loadData(selectedFarmId);
       } else {
         alert(data.error || 'Flock age synchronization rejected by server.');
       }
@@ -394,7 +445,7 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
         setUserFormSuccess(isNewUser ? 'Operator security credential generated successfully' : 'Operator credentials and Access Claim rules compiled successfully.');
         setTimeout(() => {
           setUserModalOpen(false);
-          loadData();
+          loadData(selectedFarmId);
         }, 1200);
       } else {
         setUserFormError(data.error || 'Server rejected Operator command');
@@ -428,7 +479,7 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
       const data = await res.json();
       if (res.ok) {
         alert(data.message || 'Operator de-registered successfully.');
-        loadData();
+        loadData(selectedFarmId);
       } else {
         alert(data.error || 'Failed deleting user profile');
       }
@@ -449,7 +500,7 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
         
         <div className="flex items-center gap-3">
           <button
-            onClick={loadData}
+            onClick={() => loadData(selectedFarmId)}
             className="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-slate-600 smooth-hover"
             title="Refresh statistics and indexes"
           >
@@ -483,6 +534,49 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
                 <p className="text-xs text-slate-400">Dynamic template elements used globally to generate bill / invoice page headers</p>
               </div>
             </div>
+
+            {/* Farm Selector Banner for Multi-Tenant Support */}
+            {myRole === 'Developer' ? (
+              <div className="p-4 bg-amber-50/80 border border-amber-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-amber-100 text-amber-800 rounded-xl">
+                    <Building className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-amber-900">Developer Multi-Tenant Farm Console</h4>
+                    <p className="text-[11px] text-amber-700">Select which farm's settings and logo you are configuring:</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={selectedFarmId}
+                    onChange={(e) => {
+                      const newId = Number(e.target.value);
+                      setSelectedFarmId(newId);
+                      if (switchFarm) switchFarm(newId);
+                    }}
+                    className="bg-white border border-amber-300 text-slate-800 font-bold text-xs rounded-xl px-3 py-2 shadow-xs focus:ring-2 focus:ring-amber-400 focus:outline-hidden cursor-pointer"
+                  >
+                    {farms.map((f: any) => (
+                      <option key={f.Id} value={f.Id}>
+                        {f.FarmName} (#{f.Id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Building className="h-4 w-4 text-emerald-600" />
+                  <span className="text-xs font-medium text-slate-600">Configuring Farm:</span>
+                  <span className="text-xs font-bold text-slate-900">{farmSettings.FarmName || currentFarm?.FarmName || `Farm #${selectedFarmId}`}</span>
+                </div>
+                <span className="text-[10px] font-mono px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full font-bold">
+                  Farm ID #{selectedFarmId}
+                </span>
+              </div>
+            )}
 
             {settingsError && (
               <div className="p-4 bg-rose-50 border border-rose-100 text-rose-700 rounded-2xl text-xs font-mono">
@@ -869,7 +963,7 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
             </select>
 
             <button
-              onClick={fetchAuditLogs}
+              onClick={() => fetchAuditLogs(selectedFarmId)}
               className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 font-mono text-white text-xs font-semibold rounded-xl smooth-hover"
             >
               QUERY TRACE

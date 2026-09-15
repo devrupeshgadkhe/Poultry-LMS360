@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { 
+  supabaseServer,
   getSupabaseUsers, 
   createSupabaseUser, 
   updateSupabaseUser, 
@@ -12,15 +13,94 @@ import {
   deleteSupabaseUser 
 } from './supabase.js';
 
+function getFarmIdFromRequest(req: Request): number {
+  const requester = getRequester(req);
+  if (requester && requester.Role && requester.Role !== 'Developer' && requester.FarmId) {
+    return Number(requester.FarmId);
+  }
+  const headerId = req.headers['x-farm-id'];
+  if (headerId && !isNaN(Number(headerId))) return Number(headerId);
+  if (req.query.farmId && !isNaN(Number(req.query.farmId))) return Number(req.query.farmId);
+  if (req.body && req.body.FarmId && !isNaN(Number(req.body.FarmId))) return Number(req.body.FarmId);
+  if (req.body && req.body.farmId && !isNaN(Number(req.body.farmId))) return Number(req.body.farmId);
+  return 1;
+}
+
 export const settingsControllers = {
   // GET /api/settings
   async getSettings(req: Request, res: Response) {
     try {
-      let settings = await query.get('SELECT * FROM FarmSettings WHERE Id = 1');
+      const farmId = getFarmIdFromRequest(req);
+
+      // 1. Fetch from Supabase Cloud first for real-time synchronization
+      try {
+        const { data: sbSetting, error } = await supabaseServer
+          .from('FarmSettings')
+          .select('*')
+          .eq('FarmId', farmId)
+          .maybeSingle();
+
+        if (!error && sbSetting) {
+          // Sync/mirror to local SQLite
+          const localRow = await query.get('SELECT Id FROM FarmSettings WHERE FarmId = ?', [farmId]);
+          if (localRow) {
+            await query.run(`
+              UPDATE FarmSettings
+              SET FarmName = ?, Address = ?, Phone = ?, Email = ?, Website = ?,
+                  LogoUrl = COALESCE(?, LogoUrl), IsGoogleDriveEnabled = ?
+              WHERE FarmId = ?
+            `, [
+              sbSetting.FarmName || '', sbSetting.Address || '', sbSetting.Phone || '',
+              sbSetting.Email || '', sbSetting.Website || '', sbSetting.LogoUrl,
+              sbSetting.IsGoogleDriveEnabled ? 1 : 0, farmId
+            ]);
+          } else {
+            await query.run(`
+              INSERT INTO FarmSettings (FarmId, FarmName, Address, Phone, Email, Website, LogoUrl, IsGoogleDriveEnabled)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+              farmId, sbSetting.FarmName || '', sbSetting.Address || '', sbSetting.Phone || '',
+              sbSetting.Email || '', sbSetting.Website || '', sbSetting.LogoUrl || null,
+              sbSetting.IsGoogleDriveEnabled ? 1 : 0
+            ]);
+          }
+          return res.json(sbSetting);
+        }
+      } catch (sbErr: any) {
+        console.warn('[settingsControllers.getSettings] Supabase fetch warning:', sbErr.message);
+      }
+
+      // 2. Fetch from local SQLite
+      let settings = await query.get('SELECT * FROM FarmSettings WHERE FarmId = ?', [farmId]);
       if (!settings) {
-        // Fallback seed
-        await query.run('INSERT INTO FarmSettings (FarmName, IsGoogleDriveEnabled) VALUES (?, ?)', ['Poultry LMS 360', 0]);
-        settings = await query.get('SELECT * FROM FarmSettings WHERE Id = 1');
+        // Fallback seed from Farms table
+        const farmInfo = await query.get('SELECT * FROM Farms WHERE Id = ?', [farmId]);
+        const initialName = farmInfo?.FarmName || `Farm #${farmId}`;
+        const initialAddress = farmInfo?.Address || '';
+        const initialPhone = farmInfo?.ContactPhone || '';
+        const initialEmail = farmInfo?.ContactEmail || '';
+
+        const ins = await query.run(`
+          INSERT INTO FarmSettings (FarmId, FarmName, Address, Phone, Email, Website, IsGoogleDriveEnabled)
+          VALUES (?, ?, ?, ?, ?, '', 0)
+        `, [farmId, initialName, initialAddress, initialPhone, initialEmail]);
+
+        settings = await query.get('SELECT * FROM FarmSettings WHERE Id = ?', [ins.lastID]);
+
+        // Push to Supabase Cloud
+        try {
+          await supabaseServer.from('FarmSettings').insert([{
+            FarmId: farmId,
+            FarmName: initialName,
+            Address: initialAddress,
+            Phone: initialPhone,
+            Email: initialEmail,
+            Website: '',
+            IsGoogleDriveEnabled: 0
+          }]);
+        } catch (pushErr: any) {
+          console.warn('[settingsControllers] Failed to push new farm settings to Supabase:', pushErr.message);
+        }
       }
       res.json(settings);
     } catch (e: any) {
@@ -30,27 +110,108 @@ export const settingsControllers = {
 
   // PUT /api/settings
   async updateSettings(req: Request, res: Response) {
+    const farmId = getFarmIdFromRequest(req);
     const { FarmName, Address, Phone, Email, Website, IsGoogleDriveEnabled } = req.body;
     try {
-      // Direct update of Id = 1
+      // 1. Update in local SQLite
+      const existing = await query.get('SELECT Id FROM FarmSettings WHERE FarmId = ?', [farmId]);
+      if (existing) {
+        await query.run(`
+          UPDATE FarmSettings
+          SET FarmName = ?, Address = ?, Phone = ?, Email = ?, Website = ?, IsGoogleDriveEnabled = ?
+          WHERE FarmId = ?
+        `, [
+          FarmName || 'Poultry Farm',
+          Address || '',
+          Phone || '',
+          Email || '',
+          Website || '',
+          IsGoogleDriveEnabled ? 1 : 0,
+          farmId
+        ]);
+      } else {
+        await query.run(`
+          INSERT INTO FarmSettings (FarmId, FarmName, Address, Phone, Email, Website, IsGoogleDriveEnabled)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [
+          farmId,
+          FarmName || 'Poultry Farm',
+          Address || '',
+          Phone || '',
+          Email || '',
+          Website || '',
+          IsGoogleDriveEnabled ? 1 : 0
+        ]);
+      }
+
+      // Also keep local Farms table synchronized
       await query.run(`
-        UPDATE FarmSettings
-        SET FarmName = ?, Address = ?, Phone = ?, Email = ?, Website = ?, IsGoogleDriveEnabled = ?
-        WHERE Id = 1
+        UPDATE Farms
+        SET FarmName = ?, Address = ?, ContactPhone = ?, ContactEmail = ?
+        WHERE Id = ?
       `, [
-        FarmName || 'Poultry LMS 360',
+        FarmName || 'Poultry Farm',
         Address || '',
         Phone || '',
         Email || '',
-        Website || '',
-        IsGoogleDriveEnabled ? 1 : 0
+        farmId
       ]);
 
-      const updated = await query.get('SELECT * FROM FarmSettings WHERE Id = 1');
-      await logAudit(req, '', 'Settings', 'Update Settings', req.body, 'SUCCESS');
+      const updated = await query.get('SELECT * FROM FarmSettings WHERE FarmId = ?', [farmId]);
+
+      // 2. Direct write to Supabase Cloud for multi-device synchronization
+      try {
+        const { data: sbExisting } = await supabaseServer
+          .from('FarmSettings')
+          .select('Id')
+          .eq('FarmId', farmId)
+          .maybeSingle();
+
+        if (sbExisting) {
+          await supabaseServer
+            .from('FarmSettings')
+            .update({
+              FarmName: FarmName || 'Poultry Farm',
+              Address: Address || '',
+              Phone: Phone || '',
+              Email: Email || '',
+              Website: Website || '',
+              IsGoogleDriveEnabled: IsGoogleDriveEnabled ? 1 : 0
+            })
+            .eq('FarmId', farmId);
+        } else {
+          await supabaseServer
+            .from('FarmSettings')
+            .insert([{
+              FarmId: farmId,
+              FarmName: FarmName || 'Poultry Farm',
+              Address: Address || '',
+              Phone: Phone || '',
+              Email: Email || '',
+              Website: Website || '',
+              IsGoogleDriveEnabled: IsGoogleDriveEnabled ? 1 : 0
+            }]);
+        }
+
+        // Also update Supabase Farms table
+        await supabaseServer
+          .from('Farms')
+          .update({
+            FarmName: FarmName || 'Poultry Farm',
+            Address: Address || '',
+            ContactPhone: Phone || '',
+            ContactEmail: Email || ''
+          })
+          .eq('Id', farmId);
+
+      } catch (sbErr: any) {
+        console.warn('[updateSettings] Supabase Cloud update warning:', sbErr.message);
+      }
+
+      await logAudit(req, '', 'Settings', 'Update Settings', { farmId, ...req.body }, 'SUCCESS');
       res.json({ message: 'Settings saved successfully', settings: updated });
     } catch (e: any) {
-      await logAudit(req, '', 'Settings', 'Update Settings', req.body, 'FAILED', e.message);
+      await logAudit(req, '', 'Settings', 'Update Settings', { farmId, ...req.body }, 'FAILED', e.message);
       res.status(500).json({ error: e.message });
     }
   },
@@ -58,42 +219,76 @@ export const settingsControllers = {
   // POST /api/settings/logo
   async uploadLogo(req: Request, res: Response) {
     try {
-      const { imageBase64, mimeType } = req.body;
-      if (!imageBase64) {
+      const farmId = getFarmIdFromRequest(req);
+      const { imageBase64, mimeType, dataUrl: incomingDataUrl } = req.body;
+      if (!imageBase64 && !incomingDataUrl) {
         return res.status(400).json({ error: 'No image data received.' });
       }
 
+      // Construct standard dataUrl format for cross-device compatibility
+      let dataUrl = incomingDataUrl;
+      let rawBase64 = imageBase64 || '';
+      if (rawBase64.startsWith('data:')) {
+        dataUrl = rawBase64;
+        rawBase64 = rawBase64.split(',')[1] || '';
+      } else if (!dataUrl && rawBase64) {
+        dataUrl = `data:${mimeType || 'image/png'};base64,${rawBase64}`;
+      } else if (dataUrl && !rawBase64) {
+        rawBase64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+      }
+
       // Check size (max 5MB)
-      const buffer = Buffer.from(imageBase64, 'base64');
+      const buffer = Buffer.from(rawBase64, 'base64');
       if (buffer.length > 5 * 1024 * 1024) {
         return res.status(400).json({ error: 'Image file size exceeds the 5MB limits.' });
       }
 
-      // Determine extension
-      let ext = '.png';
-      if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
-        ext = '.jpg';
-      } else if (mimeType === 'image/svg+xml') {
-        ext = '.svg';
+      // 1. Direct Save to Supabase Cloud FarmSettings table
+      try {
+        const { data: sbExisting } = await supabaseServer
+          .from('FarmSettings')
+          .select('Id')
+          .eq('FarmId', farmId)
+          .maybeSingle();
+
+        if (sbExisting) {
+          const { error: sbUpdateErr } = await supabaseServer
+            .from('FarmSettings')
+            .update({ LogoUrl: dataUrl })
+            .eq('FarmId', farmId);
+          if (sbUpdateErr) console.error('[uploadLogo] Supabase error:', sbUpdateErr.message);
+        } else {
+          await supabaseServer
+            .from('FarmSettings')
+            .insert([{ FarmId: farmId, LogoUrl: dataUrl, FarmName: `Farm #${farmId}` }]);
+        }
+      } catch (sbErr: any) {
+        console.warn('[uploadLogo] Supabase Cloud logo update warning:', sbErr.message);
       }
 
-      // Resolve directory path
-      const dirPath = path.join(process.cwd(), 'uploads', 'farm');
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
+      // 2. Save in local SQLite database
+      const localExisting = await query.get('SELECT Id FROM FarmSettings WHERE FarmId = ?', [farmId]);
+      if (localExisting) {
+        await query.run('UPDATE FarmSettings SET LogoUrl = ? WHERE FarmId = ?', [dataUrl, farmId]);
+      } else {
+        await query.run('INSERT INTO FarmSettings (FarmId, LogoUrl, FarmName) VALUES (?, ?, ?)', [farmId, dataUrl, `Farm #${farmId}`]);
       }
 
-      // Physical File Overwrite to preserve disk space
-      const fileName = `farm_logo${ext}`;
-      const fullPath = path.join(dirPath, fileName);
-      
-      fs.writeFileSync(fullPath, buffer);
+      // 3. Physical file backup on disk for local serving
+      try {
+        let ext = '.png';
+        if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = '.jpg';
+        else if (mimeType === 'image/svg+xml') ext = '.svg';
+        const dirPath = path.join(process.cwd(), 'uploads', 'farm');
+        if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+        const fileName = `farm_${farmId}_logo${ext}`;
+        fs.writeFileSync(path.join(dirPath, fileName), buffer);
+      } catch (diskErr: any) {
+        console.warn('[uploadLogo] Local disk cache write warning:', diskErr.message);
+      }
 
-      const dbUrl = `/uploads/farm/${fileName}`;
-      await query.run('UPDATE FarmSettings SET LogoUrl = ? WHERE Id = 1', [dbUrl]);
-
-      await logAudit(req, '', 'Settings', 'Upload Farm Logo', { url: dbUrl }, 'SUCCESS');
-      res.json({ message: 'Logo successfully processed and updated.', logoUrl: dbUrl });
+      await logAudit(req, '', 'Settings', 'Upload Farm Logo', { farmId, url: 'Supabase Cloud Data URI' }, 'SUCCESS');
+      res.json({ message: 'Logo successfully saved in Supabase and updated.', logoUrl: dataUrl });
     } catch (e: any) {
       await logAudit(req, '', 'Settings', 'Upload Farm Logo', {}, 'FAILED', e.message);
       res.status(500).json({ error: e.message });
@@ -103,17 +298,22 @@ export const settingsControllers = {
   // POST /api/settings/sync-ages
   async syncFlockAges(req: Request, res: Response) {
     try {
+      const farmId = getFarmIdFromRequest(req);
       const now = new Date();
-      const activeFlocks = await query.all("SELECT * FROM Flocks WHERE Status = 'Active'");
+      const activeFlocks = await query.all("SELECT * FROM Flocks WHERE Status = 'Active' AND FarmId = ?", [farmId]);
       
       for (const flock of activeFlocks) {
         const start = new Date(flock.StartDate);
         const days = Math.floor((now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-        await query.run('UPDATE Flocks SET AgeInDays = ? WHERE Id = ?', [Math.max(0, days), flock.Id]);
+        await query.run('UPDATE Flocks SET AgeInDays = ? WHERE Id = ? AND FarmId = ?', [Math.max(0, days), flock.Id, farmId]);
       }
 
-      await query.run('UPDATE FarmSettings SET LastAgeUpdateDate = ? WHERE Id = 1', [now.toISOString()]);
-      await logAudit(req, '', 'Settings', 'Flock Biological Aging Sync', {}, 'SUCCESS');
+      await query.run('UPDATE FarmSettings SET LastAgeUpdateDate = ? WHERE FarmId = ?', [now.toISOString(), farmId]);
+      try {
+        await supabaseServer.from('FarmSettings').update({ LastAgeUpdateDate: now.toISOString() }).eq('FarmId', farmId);
+      } catch {}
+
+      await logAudit(req, '', 'Settings', 'Flock Biological Aging Sync', { farmId }, 'SUCCESS');
       res.json({ message: 'All active layer flock age indices synchronized successfully.' });
     } catch (e: any) {
       await logAudit(req, '', 'Settings', 'Flock Biological Aging Sync', {}, 'FAILED', e.message);
@@ -124,32 +324,39 @@ export const settingsControllers = {
   // Background trigger checks
   async backgroundSyncAges() {
     try {
-      const settings = await query.get('SELECT * FROM FarmSettings WHERE Id = 1');
-      if (!settings) return;
+      const allFarms = await query.all('SELECT Id FROM Farms');
+      for (const farm of (allFarms || [{ Id: 1 }])) {
+        const farmId = farm.Id;
+        const settings = await query.get('SELECT * FROM FarmSettings WHERE FarmId = ?', [farmId]);
+        if (!settings) continue;
 
-      const lastUpdate = settings.LastAgeUpdateDate;
-      const now = new Date();
-      let performSync = false;
+        const lastUpdate = settings.LastAgeUpdateDate;
+        const now = new Date();
+        let performSync = false;
 
-      if (!lastUpdate) {
-        performSync = true;
-      } else {
-        const diffMs = now.getTime() - new Date(lastUpdate).getTime();
-        const diffHrs = diffMs / (1000 * 60 * 60);
-        if (diffHrs >= 24) {
+        if (!lastUpdate) {
           performSync = true;
+        } else {
+          const diffMs = now.getTime() - new Date(lastUpdate).getTime();
+          const diffHrs = diffMs / (1000 * 60 * 60);
+          if (diffHrs >= 24) {
+            performSync = true;
+          }
         }
-      }
 
-      if (performSync) {
-        const activeFlocks = await query.all("SELECT * FROM Flocks WHERE Status = 'Active'");
-        for (const flock of activeFlocks) {
-          const start = new Date(flock.StartDate);
-          const days = Math.floor((now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-          await query.run('UPDATE Flocks SET AgeInDays = ? WHERE Id = ?', [Math.max(0, days), flock.Id]);
+        if (performSync) {
+          const activeFlocks = await query.all("SELECT * FROM Flocks WHERE Status = 'Active' AND FarmId = ?", [farmId]);
+          for (const flock of activeFlocks) {
+            const start = new Date(flock.StartDate);
+            const days = Math.floor((now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+            await query.run('UPDATE Flocks SET AgeInDays = ? WHERE Id = ? AND FarmId = ?', [Math.max(0, days), flock.Id, farmId]);
+          }
+          await query.run('UPDATE FarmSettings SET LastAgeUpdateDate = ? WHERE FarmId = ?', [now.toISOString(), farmId]);
+          try {
+            await supabaseServer.from('FarmSettings').update({ LastAgeUpdateDate: now.toISOString() }).eq('FarmId', farmId);
+          } catch {}
+          console.log(`[JOBS] Background layer biological flock records updated for Farm #${farmId}.`);
         }
-        await query.run('UPDATE FarmSettings SET LastAgeUpdateDate = ? WHERE Id = 1', [now.toISOString()]);
-        console.log('[JOBS] Background layer biological flock records updated.');
       }
     } catch (e: any) {
       console.error('[JOBS] Biological aging job exception:', e.message);

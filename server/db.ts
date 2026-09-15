@@ -706,6 +706,11 @@ export async function initializeDatabase() {
   try {
     const fsColumns = await query.all("PRAGMA table_info(FarmSettings)");
     const fsColumnNames = fsColumns.map((col: any) => col.name);
+    if (!fsColumnNames.includes('FarmId')) {
+      console.log("Adding missing column 'FarmId' to FarmSettings");
+      await query.run(`ALTER TABLE FarmSettings ADD COLUMN FarmId INTEGER DEFAULT 1`);
+      await query.run(`UPDATE FarmSettings SET FarmId = 1 WHERE FarmId IS NULL OR FarmId = 0`);
+    }
     if (!fsColumnNames.includes('GoogleDriveRefreshToken')) {
       console.log("Adding missing column 'GoogleDriveRefreshToken' to FarmSettings");
       await query.run(`ALTER TABLE FarmSettings ADD COLUMN GoogleDriveRefreshToken TEXT`);
@@ -758,6 +763,19 @@ export async function initializeDatabase() {
     if (!fsColumnNames.includes('GithubBackupPath')) {
       await query.run(`ALTER TABLE FarmSettings ADD COLUMN GithubBackupPath TEXT NULL`);
     }
+
+    // Ensure all farms in Farms table have a corresponding FarmSettings row
+    const existingFarms = await query.all("SELECT Id, FarmName, ContactPhone, ContactEmail, Address FROM Farms");
+    for (const farm of existingFarms) {
+      const fsRow = await query.get("SELECT Id FROM FarmSettings WHERE FarmId = ?", [farm.Id]);
+      if (!fsRow) {
+        await query.run(`
+          INSERT INTO FarmSettings (FarmId, FarmName, Phone, Email, Address, IsGoogleDriveEnabled)
+          VALUES (?, ?, ?, ?, ?, 0)
+        `, [farm.Id, farm.FarmName, farm.ContactPhone || '', farm.ContactEmail || '', farm.Address || '']);
+        console.log(`[DB Migration] Seeded initial FarmSettings for Farm #${farm.Id} (${farm.FarmName})`);
+      }
+    }
   } catch (err: any) {
     console.error("Failed to migrate FarmSettings columns:", err.message);
   }
@@ -784,7 +802,7 @@ export async function initializeDatabase() {
 
   // Ensure all application tables have FarmId for multi-tenant isolation
   const tablesNeedingFarmId = [
-    'Flocks', 'Inventories', 'DailyLogs', 'Vaccinations', 'EggInventories',
+    'FarmSettings', 'Flocks', 'Inventories', 'DailyLogs', 'Vaccinations', 'EggInventories',
     'Customers', 'Suppliers', 'Purchases', 'PurchaseItems', 'PurchaseExtraExpenses',
     'PurchaseReturns', 'PurchaseReturnItems', 'Sales', 'SaleItems', 'SaleReturns',
     'SaleReturnItems', 'TransactionCategories', 'Staff', 'FinancialTransactions',

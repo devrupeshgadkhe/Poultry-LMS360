@@ -2065,8 +2065,51 @@ export const salesService = {
 // ==============================================================================
 export const settingsService = {
   async getSettings(farmId: number): Promise<any> {
-    const { data } = await supabase.from('Farms').select('*').eq('Id', farmId).single();
-    return data || {};
+    try {
+      // 1. Try Supabase FarmSettings first for real-time cloud data
+      const { data, error } = await supabase
+        .from('FarmSettings')
+        .select('*')
+        .eq('FarmId', farmId)
+        .maybeSingle();
+
+      if (!error && data) {
+        return data;
+      }
+    } catch {}
+
+    // 2. Try backend API with x-farm-id
+    try {
+      const res = await fetch('/api/settings', {
+        headers: { 'x-farm-id': String(farmId) }
+      });
+      if (res.ok) {
+        const localSettings = await res.json();
+        if (localSettings && localSettings.FarmName) {
+          return localSettings;
+        }
+      }
+    } catch {}
+
+    // 3. Fallback to Farms table
+    try {
+      const { data: farm } = await supabase.from('Farms').select('*').eq('Id', farmId).maybeSingle();
+      if (farm) return farm;
+    } catch {}
+
+    return {};
+  },
+
+  async updateSettings(farmId: number, settingsData: any): Promise<any> {
+    const res = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-farm-id': String(farmId)
+      },
+      body: JSON.stringify({ ...settingsData, FarmId: farmId })
+    });
+    return res.json();
   }
 };
 

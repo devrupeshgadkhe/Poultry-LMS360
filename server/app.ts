@@ -265,7 +265,8 @@ apiRouter.post('/migration/execute', migrationControllers.executeMigration);
 // Bi-Directional Multi-Device Cloud & Local Synchronization
 apiRouter.post('/sync/record', async (req, res) => {
   try {
-    const { table, action, data } = req.body;
+    const { table, action } = req.body;
+    const data = req.body.data || req.body.record;
     if (!table || !data) return res.status(400).json({ error: 'table and data required' });
     
     // Check if table exists in local DB
@@ -293,6 +294,15 @@ apiRouter.post('/sync/record', async (req, res) => {
         filtered[k] = v;
       }
     }
+
+    // Special handling for FarmSettings to match on FarmId
+    if (table === 'FarmSettings' && filtered.FarmId) {
+      const existing = await query.get('SELECT Id FROM FarmSettings WHERE FarmId = ?', [filtered.FarmId]);
+      if (existing) {
+        filtered.Id = existing.Id;
+      }
+    }
+
     const keys = Object.keys(filtered);
     if (keys.length > 0) {
       const columns = keys.map(k => `\`${k}\``).join(', ');
