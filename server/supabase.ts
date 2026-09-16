@@ -96,6 +96,17 @@ export async function createSupabaseUser(userData: {
     ? userData.permissions 
     : (userData.role === 'Admin' || userData.role === 'Developer' ? 'All' : '');
 
+  // Deduplication check: prevent duplicate user accounts with identical username in the same farm
+  const { data: existingUser } = await supabaseServer
+    .from('Users')
+    .select('Id')
+    .ilike('Username', userData.username.trim())
+    .eq('FarmId', userData.farmId);
+
+  if (existingUser && existingUser.length > 0) {
+    throw new Error(`An account with username "${userData.username}" already exists in this farm.`);
+  }
+
   const { data, error } = await supabaseServer
     .from('Users')
     .insert([{
@@ -253,10 +264,24 @@ export async function createSupabaseFarm(farmData: {
   adminEmail?: string;
   adminPassword: string;
 }) {
+  const trimmedName = (farmData.FarmName || '').trim();
+
+  // Deduplication check: prevent creating multiple farms with the same name
+  const { data: existingFarms } = await supabaseServer
+    .from('Farms')
+    .select('*')
+    .ilike('FarmName', trimmedName);
+
+  if (existingFarms && existingFarms.length > 0) {
+    const existing = existingFarms[0];
+    console.log(`[Supabase] Farm "${trimmedName}" already exists (ID #${existing.Id}). Returning existing record to prevent duplicates.`);
+    return existing;
+  }
+
   const { data: newFarm, error: farmErr } = await supabaseServer
     .from('Farms')
     .insert([{
-      FarmName: farmData.FarmName,
+      FarmName: trimmedName,
       OwnerName: farmData.OwnerName || '',
       ContactPhone: farmData.ContactPhone || '',
       ContactEmail: farmData.ContactEmail || '',
@@ -271,6 +296,24 @@ export async function createSupabaseFarm(farmData: {
 
   const createdFarm = newFarm && newFarm[0] ? newFarm[0] : null;
   const newFarmId = createdFarm?.Id;
+
+  // Create initial FarmSettings for this new farm
+  if (newFarmId) {
+    try {
+      await supabaseServer
+        .from('FarmSettings')
+        .upsert([{
+          FarmId: newFarmId,
+          FarmName: trimmedName,
+          Address: farmData.Address || '',
+          Phone: farmData.ContactPhone || '',
+          Email: farmData.ContactEmail || '',
+          IsGoogleDriveEnabled: 0
+        }], { onConflict: 'FarmId' });
+    } catch (settingsErr: any) {
+      console.warn('[Supabase] Warning initializing FarmSettings:', settingsErr.message);
+    }
+  }
 
   // Create admin user in Supabase Users table
   if (farmData.adminUsername && newFarmId) {
@@ -292,7 +335,7 @@ export async function createSupabaseFarm(farmData: {
       VALUES (?, ?, ?, ?, ?, ?, 1)
     `, [
       createdFarm?.Id,
-      farmData.FarmName,
+      trimmedName,
       farmData.OwnerName || '',
       farmData.ContactPhone || '',
       farmData.ContactEmail || '',
@@ -367,17 +410,18 @@ const OPERATIONAL_TABLES = [
 ];
 
 /**
- * Bi-directional synchronization between local SQLite and Supabase Cloud
+ * Safe synchronization from Supabase Cloud (Single Source of Truth) to local SQLite cache.
+ * Cloud data is pulled to keep local SQLite in sync, while preserving Supabase production data intact.
  */
 export async function syncAllTablesBidirectional(): Promise<Record<string, { pulled: number; pushed: number }>> {
   const stats: Record<string, { pulled: number; pushed: number }> = {};
   if (!supabaseServer) return stats;
 
   try {
-    // 1. Sync Farms & Users first
+    // 1. Sync Farms, FarmSettings, & Users first from Supabase Cloud (SSOT)
     await syncSupabaseToLocal();
 
-    // 2. Sync all operational tables
+    // 2. Sync all operational tables from Supabase -> SQLite
     for (const table of OPERATIONAL_TABLES) {
       stats[table] = { pulled: 0, pushed: 0 };
       try {
@@ -409,28 +453,15 @@ export async function syncAllTablesBidirectional(): Promise<Record<string, { pul
             }
           }
         }
-
-        // Push from SQLite -> Supabase (records that may only exist locally)
-        const localRows = await query.all(`SELECT * FROM \`${table}\``);
-        if (localRows && localRows.length > 0) {
-          const sbIdSet = new Set((sbRows || []).map((r: any) => r.Id));
-          const missingInSb = localRows.filter((lr: any) => lr.Id && !sbIdSet.has(lr.Id));
-          if (missingInSb.length > 0) {
-            for (let i = 0; i < missingInSb.length; i += 50) {
-              const chunk = missingInSb.slice(i, i + 50);
-              const { error: pushErr } = await supabaseServer.from(table).upsert(chunk, { onConflict: 'Id' });
-              if (!pushErr) {
-                stats[table].pushed += chunk.length;
-              }
-            }
-          }
-        }
+        // Note: Supabase Cloud is the Single Source of Truth (SSOT).
+        // We do NOT blindly push local SQLite tables to Supabase on server boot,
+        // which prevents development/preview restarts from ever overwriting or corrupting production data.
       } catch (tblErr: any) {
-        console.warn(`[Bidirectional Sync] Warning on table ${table}:`, tblErr.message);
+        console.warn(`[Cloud Sync] Warning on table ${table}:`, tblErr.message);
       }
     }
   } catch (err: any) {
-    console.error('[Bidirectional Sync] Critical error:', err.message);
+    console.error('[Cloud Sync] Critical error:', err.message);
   }
 
   return stats;

@@ -23,6 +23,7 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
   const [searchQuery, setSearchQuery] = useState('');
   const [editingCustomerId, setEditingCustomerId] = useState<number | null>(null);
   const [editingSupplierId, setEditingSupplierId] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Unified Form Fields
   const [cForm, setCForm] = useState({
@@ -106,8 +107,10 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!cForm.FullName) return alert('Name is required');
     try {
+      setIsSubmitting(true);
       const bodyPayload = {
         ...cForm,
         CurrentCreditBalance: editingCustomerId ? cForm.CurrentCreditBalance : cForm.OpeningCreditBalance
@@ -126,13 +129,17 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
     } catch (e: any) {
       console.error(e);
       alert(e.message || 'Failed to save customer');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!sForm.CompanyName) return alert('Company name is required');
     try {
+      setIsSubmitting(true);
       const bodyPayload = {
         ...sForm,
         CurrentCreditBalance: editingSupplierId ? sForm.CurrentCreditBalance : sForm.OpeningCreditBalance
@@ -151,6 +158,8 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
     } catch (e: any) {
       console.error(e);
       alert(e.message || 'Failed to save supplier');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -324,8 +333,12 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
             >
               Cancel
             </button>
-            <button type="submit" className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-semibold">
-              {editingCustomerId ? 'Update Customer' : 'Save Customer'}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className={`px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-semibold ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              {isSubmitting ? 'Saving...' : (editingCustomerId ? 'Update Customer' : 'Save Customer')}
             </button>
           </div>
         </form>
@@ -408,8 +421,12 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
             >
               Cancel
             </button>
-            <button type="submit" className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-semibold">
-              {editingSupplierId ? 'Update Supplier' : 'Save Supplier'}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className={`px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-semibold ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              {isSubmitting ? 'Saving...' : (editingSupplierId ? 'Update Supplier' : 'Save Supplier')}
             </button>
           </div>
         </form>

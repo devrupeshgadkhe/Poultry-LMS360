@@ -30,6 +30,7 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
   const [editingFlock, setEditingFlock] = useState<any | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [editErrors, setEditErrors] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     fetchFlocks();
@@ -107,6 +108,8 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     const validationErrors = validateFlock(newFlock);
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
@@ -115,6 +118,7 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
     setErrors({});
 
     try {
+      setIsSubmitting(true);
       await flockService.createFlock(farmId, newFlock);
       setShowAddForm(false);
       setNewFlock({
@@ -148,12 +152,14 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
       } catch (fallbackErr) {
         alert(err.message || 'Failed to create flock');
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingFlock) return;
+    if (isSubmitting || !editingFlock) return;
 
     const validationErrors = validateFlock(editingFlock);
     if (Object.keys(validationErrors).length > 0) {
@@ -163,6 +169,7 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
     setEditErrors({});
 
     try {
+      setIsSubmitting(true);
       await flockService.updateFlock(farmId, editingFlock.Id, editingFlock);
       setEditingFlock(null);
       fetchFlocks();
@@ -186,6 +193,8 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
       } catch (fallbackErr) {
         alert(err.message || 'Failed to update flock');
       }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -355,10 +364,11 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-semibold smooth-hover"
+              disabled={isSubmitting}
+              className={`px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-semibold smooth-hover flex items-center gap-2 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
               id="save-flock-btn"
             >
-              Confirm Deployment
+              {isSubmitting ? 'Deploying...' : 'Confirm Deployment'}
             </button>
           </div>
         </form>
@@ -516,9 +526,10 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
                     </button>
                     <button
                       type="submit"
-                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-semibold smooth-hover"
+                      disabled={isSubmitting}
+                      className={`px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-semibold smooth-hover ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      Save
+                      {isSubmitting ? 'Saving...' : 'Save'}
                     </button>
                   </div>
                 </form>

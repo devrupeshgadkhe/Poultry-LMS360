@@ -226,6 +226,7 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
 
   // Execute Quick Milling Batch
   const handleExecuteBatch = async () => {
+    if (producing) return;
     if (!activeRecipe) {
       setProductionError('Please select a formula first.');
       return;
@@ -345,6 +346,7 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
   // Submit Recipe Creation
   const handleSubmitRecipe = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingRecipe) return;
     if (totalPercentage !== 100) {
       alert(`Total ingredient percentage must equal 100%. Currently: ${totalPercentage}%`);
       return;

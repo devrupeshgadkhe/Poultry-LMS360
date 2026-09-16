@@ -222,6 +222,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     if (editingLogId && !canEdit) {
       alert('Security Alert: You do not have permission to edit daily logs.');
       return;

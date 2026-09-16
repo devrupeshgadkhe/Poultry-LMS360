@@ -650,6 +650,9 @@ async function uploadToGoogleDriveFromRefreshToken(refreshToken: string, filenam
   return await uploadToGoogleDrive(accessToken, filename, contentStr);
 }
 
+// Global restoration concurrency mutex to prevent overlapping restore executions
+let isRestoreInProgress = false;
+
 /**
  * Backup controllers for mounting onto routes.
  */
@@ -676,6 +679,12 @@ export const backupControllers = {
 
   // POST /api/backups/restore
   async restoreBackup(req: any, res: any) {
+    if (isRestoreInProgress) {
+      return res.status(409).json({
+        error: 'A database restoration is already in progress. Please wait until it completes.'
+      });
+    }
+    isRestoreInProgress = true;
     try {
       const backup = req.body;
       const targetFarmId = req.body?.farmId || req.headers['x-farm-id'] || 1;
@@ -683,6 +692,8 @@ export const backupControllers = {
       res.json({ message: 'System database restored successfully.' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    } finally {
+      isRestoreInProgress = false;
     }
   },
 
@@ -741,6 +752,12 @@ export const backupControllers = {
 
   // POST /api/backups/local/:filename/restore
   async restoreLocal(req: any, res: any) {
+    if (isRestoreInProgress) {
+      return res.status(409).json({
+        error: 'A database restoration is already in progress. Please wait until it completes.'
+      });
+    }
+    isRestoreInProgress = true;
     try {
       const { filename } = req.params;
       const safeFilename = path.basename(filename);
@@ -757,6 +774,8 @@ export const backupControllers = {
       res.json({ message: 'System database restored successfully from local snapshot.' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    } finally {
+      isRestoreInProgress = false;
     }
   },
 

@@ -26,6 +26,7 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
     MinThreshold: 100,
     Notes: ''
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     fetchItems();
@@ -70,8 +71,10 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!newItem.ItemName) return alert('Please enter an item name.');
     try {
+      setIsSubmitting(true);
       try {
         const itemPayload = {
           ...newItem,
@@ -119,6 +122,8 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -329,10 +334,11 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-semibold smooth-hover"
+              disabled={isSubmitting}
+              className={`px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-semibold smooth-hover ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
               id="save-inv-btn"
             >
-              {editingItemId ? 'Update Item' : 'Commit Item'}
+              {isSubmitting ? 'Saving...' : (editingItemId ? 'Update Item' : 'Commit Item')}
             </button>
           </div>
         </form>

@@ -92,6 +92,7 @@ export const SuperAdminConsole: React.FC = () => {
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!newFarm.farmName.trim() || !newFarm.ownerName.trim()) {
       setFormMsg({ type: 'error', text: 'Farm name and Owner name are required.' });
       return;

@@ -27,6 +27,8 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
     ScheduledDate: ''
   });
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   useEffect(() => {
     fetchVaccines();
     fetchFlocks();
@@ -89,6 +91,7 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!newVaccine.FlockId) return alert('Please select a flock.');
     
     // Validate if Phase is Scheduled, we must have a Scheduled Date
@@ -98,6 +101,7 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
     }
 
     try {
+      setIsSubmitting(true);
       const payload = {
         ...newVaccine,
         FlockId: parseInt(newVaccine.FlockId),
@@ -132,6 +136,8 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -361,11 +367,12 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-semibold smooth-hover flex items-center gap-1 animate-fade-in"
+              disabled={isSubmitting}
+              className={`px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-semibold smooth-hover flex items-center gap-1 animate-fade-in ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
               id="save-vac-btn"
             >
               <ShieldCheck className="h-4 w-4" />
-              {editingVaccineId ? 'Save Changes' : 'Save Record'}
+              {isSubmitting ? 'Saving...' : (editingVaccineId ? 'Save Changes' : 'Save Record')}
             </button>
           </div>
         </form>

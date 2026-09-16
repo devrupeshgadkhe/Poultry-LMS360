@@ -120,60 +120,34 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
     adminPassword: string;
   }): Promise<{ success: boolean; message: string; farm?: Farm }> => {
     try {
-      // 1. Create in local database via API
-      let createdFarm: Farm | null = null;
-      try {
-        const apiRes = await fetch('/api/farms', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            FarmName: farmData.farmName,
-            ManagerName: farmData.ownerName,
-            ContactPhone: farmData.contactPhone,
-            Location: farmData.address,
-            adminUsername: farmData.adminUsername,
-            adminEmail: farmData.adminEmail,
-            adminPassword: farmData.adminPassword
-          })
-        });
+      // Create farm via backend API (handles Supabase insertion, Admin provisioning, and SQLite sync in a single atomic transaction)
+      const apiRes = await fetch('/api/farms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          FarmName: farmData.farmName.trim(),
+          ManagerName: farmData.ownerName.trim(),
+          ContactPhone: farmData.contactPhone || '',
+          ContactEmail: farmData.contactEmail || '',
+          Location: farmData.address || '',
+          adminUsername: farmData.adminUsername.trim(),
+          adminEmail: farmData.adminEmail || '',
+          adminPassword: farmData.adminPassword
+        })
+      });
 
-        if (apiRes.ok) {
-          const json = await apiRes.json();
-          createdFarm = json.farm;
-        }
-      } catch (apiErr) {
-        console.warn('Local farm creation error:', apiErr);
-      }
-
-      // 2. Also sync to Supabase if available
-      try {
-        const { data: newFarms } = await supabase
-          .from('Farms')
-          .insert([
-            {
-              FarmName: farmData.farmName,
-              OwnerName: farmData.ownerName,
-              ContactPhone: farmData.contactPhone || '',
-              ContactEmail: farmData.contactEmail || '',
-              Address: farmData.address || '',
-              IsActive: 1
-            }
-          ])
-          .select();
-
-        if (newFarms && newFarms.length > 0 && !createdFarm) {
-          createdFarm = newFarms[0];
-        }
-      } catch (sbErr) {
-        console.warn('Supabase sync skipped:', sbErr);
+      const json = await apiRes.json();
+      if (!apiRes.ok) {
+        throw new Error(json.error || 'Server rejected farm registration');
       }
 
       await refreshFarms();
 
-      if (createdFarm) {
-        return { success: true, message: 'Farm registered and administrator provisioned successfully', farm: createdFarm };
-      }
-      return { success: true, message: 'Farm registered successfully' };
+      return {
+        success: true,
+        message: json.message || 'Farm registered and administrator provisioned successfully',
+        farm: json.farm
+      };
     } catch (err: any) {
       return { success: false, message: err.message || 'Failed to create farm' };
     }

@@ -114,6 +114,7 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
   const [returnItemsState, setReturnItemsState] = useState<any[]>([]);
   const [returnDate, setReturnDate] = useState(new Date().toISOString().split('T')[0]);
   const [returnNotes, setReturnNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -360,6 +361,7 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!supplierId) return alert('Please choose a supplier.');
     if (items.some(i => !i.InventoryId)) return alert('Please choose a material/stock item for each row.');
 
@@ -382,6 +384,7 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
     }));
 
     try {
+      setIsSubmitting(true);
       const purchasePayload = {
         SupplierId: supplierId ? parseInt(supplierId) : null,
         PurchaseDate: purchaseDate,
@@ -414,15 +417,19 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'An error occurred while saving the purchase.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   // Trigger quick supplier add
   const handleAddQuickSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!quickSupplierName.trim()) return alert('Please enter a supplier company name');
 
     try {
+      setIsSubmitting(true);
       const newSup = await stakeholderService.createSupplier(farmId, {
         CompanyName: quickSupplierName,
         ContactPerson: quickSupplierContact || 'Direct Head',
@@ -449,15 +456,19 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'Cannot add supplier');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   // Trigger quick inventory add
   const handleAddQuickInventory = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!quickInventoryName.trim()) return alert('Please enter an item name.');
 
     try {
+      setIsSubmitting(true);
       const newInv = await inventoryService.createInventory(farmId, {
         ItemName: quickInventoryName,
         Category: quickInventoryCategory as any,
@@ -502,6 +513,8 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'Cannot add item to inventory');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -627,6 +640,7 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
   // Post Return transaction
   const handlePostReturn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const activeReturnRows = returnItemsState.filter(i => (parseFloat(String(i.ReturnQuantity)) || 0) > 0);
     
     if (activeReturnRows.length === 0) {
@@ -642,6 +656,7 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
     }
 
     try {
+      setIsSubmitting(true);
       await purchaseService.returnPurchase(
         farmId,
         parseInt(returnPurchaseId!),
@@ -664,6 +679,8 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'Failed to submit purchase return.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1683,10 +1700,11 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
                   </button>
                   <button
                     type="submit"
-                    className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 hover:scale-[1.01] text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95"
+                    disabled={isSubmitting}
+                    className={`w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 hover:scale-[1.01] text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
                     id="save-purchase-order-btn"
                   >
-                    {editPurchaseId ? 'Correct Invoice' : 'Confirm & Post'}
+                    {isSubmitting ? 'Posting...' : (editPurchaseId ? 'Correct Invoice' : 'Confirm & Post')}
                   </button>
                 </div>
 
@@ -2065,9 +2083,10 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
                 </button>
                 <button
                   type="submit"
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs"
+                  disabled={isSubmitting}
+                  className={`px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  Save Supplier
+                  {isSubmitting ? 'Saving...' : 'Save Supplier'}
                 </button>
               </div>
             </form>
@@ -2176,9 +2195,10 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg shadow-sm"
+                  disabled={isSubmitting}
+                  className={`px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg shadow-sm ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  Post Items Return
+                  {isSubmitting ? 'Posting...' : 'Post Items Return'}
                 </button>
               </div>
             </form>
@@ -2287,9 +2307,10 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
                 </button>
                 <button
                   type="submit"
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm font-sans"
+                  disabled={isSubmitting}
+                  className={`px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm font-sans ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  Save Material
+                  {isSubmitting ? 'Saving...' : 'Save Material'}
                 </button>
               </div>
             </form>

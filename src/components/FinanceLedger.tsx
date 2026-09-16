@@ -60,6 +60,7 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   // Balance summaries
   const [cashBalance, setCashBalance] = useState(0);
   const [bankBalance, setBankBalance] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     fetchTx();
@@ -166,8 +167,10 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   // Create Transaction
   const handleSubmitTx = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!categoryId) return alert('Please select account category code');
     try {
+      setIsSubmitting(true);
       await financeService.createTransaction(farmId, {
         Date: txDate,
         Type: type,
@@ -188,16 +191,20 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'Failed to submit ledger entry');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   // Edit Transaction
   const handleUpdateTx = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!categoryId) return alert('Select Category');
     if (!editingTxId) return;
 
     try {
+      setIsSubmitting(true);
       await financeService.updateTransaction(farmId, editingTxId, {
         Date: txDate,
         Type: type,
@@ -218,6 +225,8 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'Failed to update transaction');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -266,8 +275,10 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   // Add Dynamic Category
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!newCatName) return;
     try {
+      setIsSubmitting(true);
       await financeService.createCategory(farmId, {
         Name: newCatName,
         IsIncome: newCatIsIncome,
@@ -280,6 +291,8 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'Failed to add type');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -493,9 +506,10 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
 
               <button
                 type="submit"
-                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold smooth-hover"
+                disabled={isSubmitting}
+                className={`w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold smooth-hover ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
-                Add Transaction Type
+                {isSubmitting ? 'Adding...' : 'Add Transaction Type'}
               </button>
             </form>
 
@@ -778,10 +792,11 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
             </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold smooth-hover"
+              disabled={isSubmitting}
+              className={`px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold smooth-hover ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
               id="confirm-tx-btn"
             >
-              {editingTxId ? 'Confirm Updates' : 'Post Ledger Entry'}
+              {isSubmitting ? 'Posting...' : (editingTxId ? 'Confirm Updates' : 'Post Ledger Entry')}
             </button>
           </div>
         </form>

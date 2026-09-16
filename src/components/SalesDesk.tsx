@@ -99,6 +99,7 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
   const [returnNotes, setReturnNotes] = useState('');
   const [returnQuantities, setReturnQuantities] = useState<Record<number, number>>({}); // maps SaleItem.Id -> returnqty
   const [farmSettings, setFarmSettings] = useState<any>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -324,9 +325,11 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
 
   const handleQuickCustomerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!quickCustName) return;
 
     try {
+      setIsSubmitting(true);
       const newCust = await stakeholderService.createCustomer(farmId, {
         FullName: quickCustName,
         Company: quickCustCompany,
@@ -355,11 +358,14 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'Failed to add customer');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!customerId) return alert('Please select a customer.');
     if (cart.length === 0) return alert('Select at least one billing item.');
 
@@ -463,6 +469,7 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
     };
 
     try {
+      setIsSubmitting(true);
       const salePayload = {
         CustomerId: parseInt(customerId),
         SaleDate: saleDate,
@@ -499,6 +506,8 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'Failed to process checkout');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -600,6 +609,7 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
 
   const handleProcessSalesReturn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!returnTargetSale) return;
 
     // Build items payload
@@ -617,6 +627,7 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
     }
 
     try {
+      setIsSubmitting(true);
       await salesService.returnSale(
         farmId,
         returnTargetSale.sale.Id,
@@ -631,6 +642,8 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
     } catch (error: any) {
       console.error(error);
       alert(error.message || 'Network failure processing sales return.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1273,9 +1286,10 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
                 <button
                   type="submit"
                   form="add-sale-form"
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs sm:text-sm font-extrabold shadow-lg shadow-indigo-600/20 active:translate-y-0.5 tracking-wider uppercase transition-all"
+                  disabled={isSubmitting}
+                  className={`w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs sm:text-sm font-extrabold shadow-lg shadow-indigo-600/20 active:translate-y-0.5 tracking-wider uppercase transition-all ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  {editingSaleId ? '💾 Confirm Invoice Update' : '⚡ Confirm & Print Invoice'}
+                  {isSubmitting ? 'Processing...' : (editingSaleId ? '💾 Confirm Invoice Update' : '⚡ Confirm & Print Invoice')}
                 </button>
                 <button
                   type="button"
@@ -1393,9 +1407,10 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-semibold"
+                disabled={isSubmitting}
+                className={`px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-semibold ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
-                Enroll Customer
+                {isSubmitting ? 'Enrolling...' : 'Enroll Customer'}
               </button>
             </div>
           </form>
@@ -1516,9 +1531,10 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-lg font-bold flex items-center gap-1"
+                disabled={isSubmitting}
+                className={`px-4 py-2 bg-red-700 hover:bg-red-800 text-white rounded-lg font-bold flex items-center gap-1 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
-                <RotateCcw className="h-4 w-4" /> Process Return
+                <RotateCcw className="h-4 w-4" /> {isSubmitting ? 'Processing...' : 'Process Return'}
               </button>
             </div>
           </form>

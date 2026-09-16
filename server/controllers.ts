@@ -2437,6 +2437,15 @@ export const recipeControllers = {
           }
         }
 
+        const existingRecipe = await query.get(
+          `SELECT Id FROM FoodRecipes WHERE (FarmId = ? OR FarmId IS NULL) AND RecipeName = ? LIMIT 1`,
+          [farmId, RecipeName]
+        );
+        if (existingRecipe) {
+          recipeId = existingRecipe.Id;
+          return;
+        }
+
         const result = await query.run(`
           INSERT INTO FoodRecipes (FarmId, RecipeName, BatchSizeKg, Notes, TargetFeedItemId)
           VALUES (?, ?, ?, ?, ?)

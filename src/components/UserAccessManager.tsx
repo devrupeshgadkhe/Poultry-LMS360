@@ -85,6 +85,7 @@ export const UserAccessManager: React.FC = () => {
 
   // Notification banners
   const [alertMsg, setAlertMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const fetchUsers = async () => {
     try {
@@ -199,6 +200,7 @@ export const UserAccessManager: React.FC = () => {
 
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setAlertMsg(null);
 
     const targetRole = myRole === 'Developer' ? modalForm.Role : 'Staff';
@@ -206,6 +208,7 @@ export const UserAccessManager: React.FC = () => {
     const permissionsVal = (targetRole === 'Admin' || targetRole === 'Developer') ? 'All' : modalForm.Permissions;
 
     try {
+      setIsSubmitting(true);
       if (editingUser) {
         // Update user
         const res = await fetch(`/api/users/${editingUser.Id}`, {
@@ -272,11 +275,14 @@ export const UserAccessManager: React.FC = () => {
       fetchUsers();
     } catch (err: any) {
       setAlertMsg({ type: 'error', text: err.message });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleSaveQuickReset = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!resetModalUser || !newPassword.trim()) return;
 
     if (myRole !== 'Developer' && (resetModalUser.Role === 'Developer' || resetModalUser.Role === 'Admin')) {
@@ -288,6 +294,7 @@ export const UserAccessManager: React.FC = () => {
     setResetSuccess(null);
 
     try {
+      setIsSubmitting(true);
       const activeFarmId = currentFarm?.Id || Number(localStorage.getItem('userFarmId')) || 1;
       const res = await fetch('/api/users/reset-password', {
         method: 'POST',
@@ -317,6 +324,8 @@ export const UserAccessManager: React.FC = () => {
       }, 1200);
     } catch (err: any) {
       setResetError(err.message || 'Error resetting password');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -981,9 +990,10 @@ export const UserAccessManager: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition shadow-md shadow-indigo-600/20"
+                  disabled={isSubmitting}
+                  className={`px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition shadow-md shadow-indigo-600/20 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  {editingUser ? 'Update Account' : 'Create Operator'}
+                  {isSubmitting ? 'Saving...' : (editingUser ? 'Update Account' : 'Create Operator')}
                 </button>
               </div>
             </form>
@@ -1046,9 +1056,10 @@ export const UserAccessManager: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition shadow-md shadow-indigo-600/20"
+                  disabled={isSubmitting}
+                  className={`px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition shadow-md shadow-indigo-600/20 ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  Save New Password
+                  {isSubmitting ? 'Saving...' : 'Save New Password'}
                 </button>
               </div>
             </form>

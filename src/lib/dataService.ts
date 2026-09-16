@@ -135,6 +135,19 @@ export const flockService = {
     const totalPurchasePrice = Number(flockData.TotalPurchasePrice) || 0;
     const perBird = initialCount > 0 ? totalPurchasePrice / initialCount : 0;
 
+    // Deduplication check: prevent duplicate flocks with identical identifier for this farm
+    if (flockData.FlockName) {
+      const { data: existingFlock } = await supabase
+        .from('Flocks')
+        .select('Id')
+        .eq('FarmId', farmId)
+        .ilike('FlockName', flockData.FlockName.trim());
+
+      if (existingFlock && existingFlock.length > 0) {
+        throw new Error(`A flock with identifier "${flockData.FlockName}" already exists for this farm.`);
+      }
+    }
+
     const payload = {
       FarmId: farmId,
       FlockName: flockData.FlockName || 'Unnamed Flock',
@@ -240,6 +253,19 @@ export const dailyLogService = {
     const birdsEaten = Number(logData.BirdsEatenBySelf) || 0;
     const eggsCollected = Number(logData.EggsCollected) || 0;
     const damagedEggs = Number(logData.DamagedEggsCollected) || 0;
+
+    // Deduplication check: prevent duplicate daily logs for the same flock on the same date
+    const checkDate = (logData.LogDate || new Date().toISOString().split('T')[0]).split('T')[0];
+    const { data: existingLogs } = await supabase
+      .from('DailyLogs')
+      .select('Id')
+      .eq('FarmId', farmId)
+      .eq('FlockId', flockId)
+      .ilike('LogDate', `${checkDate}%`);
+
+    if (existingLogs && existingLogs.length > 0) {
+      throw new Error(`A daily log for this flock on date ${checkDate} already exists. Please edit the existing entry instead.`);
+    }
 
     const payload = {
       FarmId: farmId,
@@ -461,6 +487,19 @@ export const inventoryService = {
    * Add a new inventory item
    */
   async createInventory(farmId: number, itemData: Partial<Inventory>): Promise<Inventory> {
+    // Deduplication check: prevent duplicate inventory items with identical name
+    if (itemData.ItemName) {
+      const { data: existingItem } = await supabase
+        .from('Inventories')
+        .select('Id')
+        .eq('FarmId', farmId)
+        .ilike('ItemName', itemData.ItemName.trim());
+
+      if (existingItem && existingItem.length > 0) {
+        throw new Error(`An inventory item with the name "${itemData.ItemName}" already exists in this farm.`);
+      }
+    }
+
     const payload = {
       FarmId: farmId,
       ItemName: itemData.ItemName || 'Unnamed Item',
@@ -555,6 +594,22 @@ export const vaccinationService = {
   async createVaccination(farmId: number, vData: Partial<Vaccination>): Promise<Vaccination> {
     const cost = Number(vData.Cost) || 0;
     const flockId = Number(vData.FlockId);
+    const vacDate = (vData.Date || new Date().toISOString().split('T')[0]).split('T')[0];
+
+    // Deduplication check: prevent double-submitting the same vaccination for a flock on the same date
+    if (flockId && vData.VaccineName) {
+      const { data: existingVac } = await supabase
+        .from('Vaccinations')
+        .select('Id')
+        .eq('FarmId', farmId)
+        .eq('FlockId', flockId)
+        .ilike('VaccineName', vData.VaccineName.trim())
+        .ilike('Date', `${vacDate}%`);
+
+      if (existingVac && existingVac.length > 0) {
+        throw new Error(`A vaccination record for "${vData.VaccineName}" on ${vacDate} already exists for this flock.`);
+      }
+    }
 
     const payload = {
       FarmId: farmId,
@@ -751,6 +806,19 @@ export const recipeService = {
 
     // 2. Insert into FoodRecipes
     try {
+      // Deduplication check: prevent duplicate recipes with identical name in this farm
+      if (recipeData.RecipeName) {
+        const { data: existingRec } = await supabase
+          .from('FoodRecipes')
+          .select('Id')
+          .eq('FarmId', farmId)
+          .ilike('RecipeName', recipeData.RecipeName.trim());
+
+        if (existingRec && existingRec.length > 0) {
+          throw new Error(`A milling recipe with the name "${recipeData.RecipeName}" already exists.`);
+        }
+      }
+
       const { data: newRecipe, error: rErr } = await supabase
         .from('FoodRecipes')
         .insert([
@@ -915,6 +983,19 @@ export const stakeholderService = {
   },
 
   async createCustomer(farmId: number, cData: Partial<Customer>): Promise<Customer> {
+    // Deduplication check: prevent duplicate customers with identical name
+    if (cData.FullName) {
+      const { data: existingCust } = await supabase
+        .from('Customers')
+        .select('Id')
+        .eq('FarmId', farmId)
+        .ilike('FullName', cData.FullName.trim());
+
+      if (existingCust && existingCust.length > 0) {
+        throw new Error(`A customer record with the name "${cData.FullName}" already exists.`);
+      }
+    }
+
     const opening = Number(cData.OpeningCreditBalance) || 0;
     const current = cData.CurrentCreditBalance !== undefined ? Number(cData.CurrentCreditBalance) || 0 : opening;
 
@@ -1002,6 +1083,19 @@ export const stakeholderService = {
   },
 
   async createSupplier(farmId: number, sData: Partial<Supplier>): Promise<Supplier> {
+    // Deduplication check: prevent duplicate suppliers with identical company name
+    if (sData.CompanyName) {
+      const { data: existingSup } = await supabase
+        .from('Suppliers')
+        .select('Id')
+        .eq('FarmId', farmId)
+        .ilike('CompanyName', sData.CompanyName.trim());
+
+      if (existingSup && existingSup.length > 0) {
+        throw new Error(`A supplier record with company name "${sData.CompanyName}" already exists.`);
+      }
+    }
+
     const opening = Number(sData.OpeningCreditBalance) || 0;
     const current = sData.CurrentCreditBalance !== undefined ? Number(sData.CurrentCreditBalance) || 0 : opening;
 
@@ -1101,14 +1195,22 @@ export const eggInventoryService = {
       throw error;
     }
 
-    // If none found for this farm, create standard defaults
+    // If none found for this farm, create standard defaults safely without race condition
     if (!data || data.length === 0) {
-      const defaults = [
-        { FarmId: farmId, GradeOrType: 'Fresh Eggs', PackSize: 'Single', Quantity: 0, UnitPrice: 0.15, SellingPrice: 0.25 },
-        { FarmId: farmId, GradeOrType: 'Damaged/Waste Eggs', PackSize: 'Single', Quantity: 0, UnitPrice: 0, SellingPrice: 0.05 }
-      ];
-      const { data: created } = await supabase.from('EggInventories').insert(defaults).select();
-      return created || [];
+      const { data: recheck } = await supabase
+        .from('EggInventories')
+        .select('*')
+        .eq('FarmId', farmId);
+
+      if (!recheck || recheck.length === 0) {
+        const defaults = [
+          { FarmId: farmId, GradeOrType: 'Fresh Eggs', PackSize: 'Single', Quantity: 0, UnitPrice: 0.15, SellingPrice: 0.25 },
+          { FarmId: farmId, GradeOrType: 'Damaged/Waste Eggs', PackSize: 'Single', Quantity: 0, UnitPrice: 0, SellingPrice: 0.05 }
+        ];
+        const { data: created } = await supabase.from('EggInventories').insert(defaults).select();
+        return created || [];
+      }
+      return recheck;
     }
 
     return (data || []).map((e: any) => ({
@@ -1391,6 +1493,20 @@ export const purchaseService = {
     const receivedAmount = Number(purchaseData.ReceivedAmount) || 0;
     const balanceAmount = grandTotal - receivedAmount;
     const purchaseStatus = balanceAmount <= 0 ? 'Paid' : (receivedAmount > 0 ? 'Partial' : 'Unpaid');
+
+    // Deduplication check: prevent duplicate purchase invoice numbers from the same supplier
+    if (purchaseData.InvoiceNumber && purchaseData.SupplierId) {
+      const { data: existingInv } = await supabase
+        .from('Purchases')
+        .select('Id')
+        .eq('FarmId', farmId)
+        .eq('SupplierId', Number(purchaseData.SupplierId))
+        .ilike('InvoiceNumber', purchaseData.InvoiceNumber.trim());
+
+      if (existingInv && existingInv.length > 0) {
+        throw new Error(`A purchase with invoice number "${purchaseData.InvoiceNumber}" already exists for this supplier.`);
+      }
+    }
 
     // 3. Insert Purchase
     const purchasePayload = {
@@ -1826,6 +1942,19 @@ export const salesService = {
     const receivedAmount = Number(saleData.ReceivedAmount) || 0;
     const balanceAmount = grandTotal - receivedAmount;
     const saleStatus = balanceAmount <= 0 ? 'Paid' : (receivedAmount > 0 ? 'Partial' : 'Unpaid');
+
+    // Deduplication check: prevent duplicate sales invoice number
+    if (saleData.InvoiceNumber) {
+      const { data: existingSale } = await supabase
+        .from('Sales')
+        .select('Id')
+        .eq('FarmId', farmId)
+        .ilike('InvoiceNumber', saleData.InvoiceNumber.trim());
+
+      if (existingSale && existingSale.length > 0) {
+        throw new Error(`A sales invoice with number "${saleData.InvoiceNumber}" already exists.`);
+      }
+    }
 
     // 2. Insert Sale
     const salePayload = {

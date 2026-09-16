@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Cloud, ShieldAlert, CheckCircle, RefreshCcw, Upload, Trash2, HardDrive, AlertTriangle, Key } from 'lucide-react';
+import { Download, Cloud, ShieldAlert, CheckCircle, RefreshCcw, Upload, Trash2, HardDrive, AlertTriangle, Key, Loader2, Database } from 'lucide-react';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 
@@ -28,6 +28,11 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
   const [stagedBackupData, setStagedBackupData] = useState<any | null>(null);
   // Auto-reload countdown
   const [countdown, setCountdown] = useState<number | null>(null);
+
+  // Active restoration status and modal overlay states
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreStep, setRestoreStep] = useState<string>('');
+  const [restoringFile, setRestoringFile] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -147,11 +152,23 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
 
   // Execute restore command on active staged backup data
   const handleExecuteRestore = async () => {
-    if (!stagedBackupData) return;
+    if (!stagedBackupData || isRestoring) return;
 
+    // Provide instant UI feedback immediately upon button press (0ms delay)
+    setIsRestoring(true);
+    setRestoringFile(stagedBackupData.fileName || 'Uploaded Backup File');
+    setRestoreStep('Connecting to database and validating schema payload...');
     setLoading(true);
     setSuccessMsg(null);
     setErrMsg(null);
+
+    // Dynamic step progression for user feedback
+    const t1 = setTimeout(() => {
+      setRestoreStep('Reconstructing database tables and schema definitions...');
+    }, 1200);
+    const t2 = setTimeout(() => {
+      setRestoreStep('Restoring records and synchronizing cloud state...');
+    }, 2400);
 
     try {
       const res = await fetch('/api/backups/restore', {
@@ -166,12 +183,16 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
         })
       });
 
+      clearTimeout(t1);
+      clearTimeout(t2);
+
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'The system database engine rejected the restoration schema.');
       }
 
-      setSuccessMsg('Database restoration completed successfully! All tables and data cells have been reconstructed.');
+      setRestoreStep('Database restored successfully! Reconstructing views...');
+      setSuccessMsg('Database restoration completed successfully! All tables and records have been reconstructed.');
       setSelectedFile(null);
       setStagedBackupData(null);
       fetchStatusAndBackups();
@@ -179,8 +200,11 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
       // Trigger automatic reload countdown for fully responsive sync
       setCountdown(3);
     } catch (err: any) {
+      clearTimeout(t1);
+      clearTimeout(t2);
       setErrMsg(err.message || 'Restoration failed. Ensure backup is a valid JSON database schema format.');
     } finally {
+      setIsRestoring(false);
       setLoading(false);
     }
   };
@@ -268,14 +292,28 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
   };
 
   const handleRestoreLocalFile = async (filename: string) => {
+    if (isRestoring) return;
+
     const confirmRestore = window.confirm(
-      `⚠️ CRITICAL DANGER ZONE:\n\nReverting database back to physical snapshot "${filename}" will instantly delete and overwrite all current database entries.\n\nType OK to proceed.`
+      `CRITICAL DANGER ZONE:\n\nReverting database back to physical snapshot "${filename}" will replace current database entries.\n\nClick OK to proceed with restoration.`
     );
     if (!confirmRestore) return;
 
+    // Instant UI feedback immediately upon confirmation
+    setIsRestoring(true);
+    setRestoringFile(filename);
+    setRestoreStep('Reading physical snapshot and preparing database engine...');
     setLoading(true);
     setSuccessMsg(null);
     setErrMsg(null);
+
+    const t1 = setTimeout(() => {
+      setRestoreStep('Reconstructing tables from physical snapshot...');
+    }, 1200);
+    const t2 = setTimeout(() => {
+      setRestoreStep('Restoring records and synchronizing cloud state...');
+    }, 2400);
+
     try {
       const res = await fetch(`/api/backups/local/${filename}/restore`, { 
         method: 'POST',
@@ -285,16 +323,25 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
         },
         body: JSON.stringify({ farmId: activeFarmId })
       });
+
+      clearTimeout(t1);
+      clearTimeout(t2);
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Snapshot restoration rejected.');
+      
+      setRestoreStep('Snapshot restored successfully! Finalizing state...');
       setSuccessMsg(`System database successfully reverted to physical snapshot: "${filename}"!`);
       fetchStatusAndBackups();
       
       // Trigger automatic reload countdown for fully responsive state update
       setCountdown(3);
     } catch (err: any) {
+      clearTimeout(t1);
+      clearTimeout(t2);
       setErrMsg(err.message);
     } finally {
+      setIsRestoring(false);
       setLoading(false);
     }
   };
@@ -437,20 +484,29 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
                 <div className="flex gap-2 pt-1.5">
                   <button
                     onClick={handleExecuteRestore}
-                    disabled={loading}
-                    className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl smooth-hover shadow-xs flex items-center justify-center gap-1.5 uppercase tracking-wider"
+                    disabled={loading || isRestoring}
+                    className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-400 text-white text-xs font-bold rounded-xl smooth-hover shadow-xs flex items-center justify-center gap-1.5 uppercase tracking-wider"
                     id="save-restore-database-btn"
                   >
-                    <CheckCircle className="h-3.5 w-3.5" />
-                    Save & Restore
+                    {isRestoring ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Restoring Database...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="h-3.5 w-3.5" />
+                        Save & Restore
+                      </>
+                    )}
                   </button>
                   <button
                     onClick={() => {
                       setSelectedFile(null);
                       setStagedBackupData(null);
                     }}
-                    disabled={loading}
-                    className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold rounded-xl smooth-hover"
+                    disabled={loading || isRestoring}
+                    className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-600 text-xs font-semibold rounded-xl smooth-hover"
                   >
                     Cancel
                   </button>
@@ -720,10 +776,17 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
                     <td className="p-4 text-right flex justify-end gap-2">
                       <button
                         onClick={() => handleRestoreLocalFile(bk.filename)}
-                        disabled={loading}
-                        className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold rounded-lg smooth-hover text-[11px]"
+                        disabled={loading || isRestoring}
+                        className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-700 font-semibold rounded-lg smooth-hover text-[11px] flex items-center gap-1"
                       >
-                        Restore State
+                        {isRestoring && restoringFile === bk.filename ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Restoring...
+                          </>
+                        ) : (
+                          'Restore State'
+                        )}
                       </button>
                       <a
                         href={`/api/backups/local/${bk.filename}/download`}
@@ -747,6 +810,53 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
           </div>
         )}
       </div>
+
+      {/* Instant Full-Screen Restoration Modal Overlay */}
+      {isRestoring && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 text-center space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="relative mx-auto w-16 h-16 flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full border-4 border-amber-500/20 border-t-amber-600 animate-spin" />
+              <Database className="w-7 h-7 text-amber-600" />
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-lg font-bold text-slate-900">
+                Restoring Database...
+              </h3>
+              {restoringFile && (
+                <p className="text-xs text-slate-500 font-mono break-all px-2 py-1 bg-slate-50 rounded-lg border border-slate-200/60 inline-block max-w-full">
+                  {restoringFile}
+                </p>
+              )}
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-3 text-left">
+              <div className="flex items-center gap-2 mb-1">
+                <Loader2 className="w-3.5 h-3.5 text-amber-600 animate-spin flex-shrink-0" />
+                <span className="text-xs font-semibold text-amber-900">Current Progress</span>
+              </div>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                {restoreStep || 'Reconstructing database structure and synchronizing records...'}
+              </p>
+            </div>
+
+            <div className="bg-slate-100 rounded-xl p-3 text-left">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <p className="text-[11px] text-slate-600 leading-tight">
+                  <strong>Please do not refresh, close, or navigate away from this window.</strong> The system is actively restoring and verifying database tables.
+                </p>
+              </div>
+            </div>
+
+            {/* Visual Animated Progress Pulse */}
+            <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+              <div className="bg-amber-600 h-full rounded-full w-2/3 animate-pulse" />
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
