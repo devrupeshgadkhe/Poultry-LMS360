@@ -147,7 +147,9 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
     search: '',
     module: '',
     status: '',
-    limit: '50'
+    limit: '50',
+    startDate: '',
+    endDate: ''
   });
   const [auditLoading, setAuditLoading] = useState(false);
 
@@ -893,7 +895,7 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
       </div>
 
       {/* Operator Audit Activity Logger Filter Block */}
-      {myRole === 'Developer' && (
+      {(myRole === 'Developer' || myRole === 'Admin') && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 smooth-shadow space-y-6" id="physical-system-audit-trails-block">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
           <div className="flex items-center gap-3">
@@ -901,73 +903,124 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
               <History className="h-5 w-5" />
             </span>
             <div>
-              <h3 className="text-base font-bold text-slate-800 font-display">System Audit Logs Trail</h3>
-              <p className="text-xs text-slate-400">Immutable chronological timeline logs tracking all active operator CRUD actions</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base font-bold text-slate-800 font-display">System Audit Logs Trail</h3>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  Farm #{selectedFarmId}: {farms.find(f => f.Id === selectedFarmId)?.FarmName || currentFarm?.FarmName || 'Current Farm'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">Immutable chronological timeline logs tracking all active operator CRUD actions for this farm</p>
             </div>
           </div>
         </div>
 
         {/* Filters */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 bg-slate-50 p-4 border border-slate-150/85 rounded-2xl">
-          <div className="relative">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search user, action, params..."
-              className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs font-mono focus:outline-hidden"
-              value={auditFilters.search}
-              onChange={(e) => setAuditFilters({ ...auditFilters, search: e.target.value })}
-            />
+        <div className="space-y-3 bg-slate-50 p-4 border border-slate-150/85 rounded-2xl">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search user, action, params..."
+                className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs font-mono focus:outline-hidden"
+                value={auditFilters.search}
+                onChange={(e) => setAuditFilters({ ...auditFilters, search: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <select
+                className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs focus:outline-hidden font-mono"
+                value={auditFilters.module}
+                onChange={(e) => setAuditFilters({ ...auditFilters, module: e.target.value })}
+              >
+                <option value="">-- All Modules --</option>
+                <option value="Auth">Auth & Login</option>
+                <option value="Settings">Settings</option>
+                <option value="UserManagement">UserManagement</option>
+                <option value="Flocks">Flocks</option>
+                <option value="DailyLogs">DailyLogs</option>
+                <option value="Health">Health / Vaccines</option>
+                <option value="Finance">Finance / Ledger</option>
+                <option value="Sales">Sales Desk</option>
+                <option value="Procurement">Procurement</option>
+                <option value="Inventory">Inventory</option>
+                <option value="Restore">Database Restore</option>
+                <option value="Developer">SQL CLI / Dev</option>
+              </select>
+            </div>
+
+            <div>
+              <select
+                className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs focus:outline-hidden font-mono"
+                value={auditFilters.status}
+                onChange={(e) => setAuditFilters({ ...auditFilters, status: e.target.value })}
+              >
+                <option value="">-- All Statuses --</option>
+                <option value="SUCCESS">SUCCESS</option>
+                <option value="FAILED">FAILED</option>
+              </select>
+            </div>
           </div>
 
-          <div>
-            <select
-              className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs focus:outline-hidden font-mono"
-              value={auditFilters.module}
-              onChange={(e) => setAuditFilters({ ...auditFilters, module: e.target.value })}
-            >
-              <option value="">-- Check Module --</option>
-              <option value="Auth">Auth & Login</option>
-              <option value="Settings">Settings</option>
-              <option value="UserManagement">UserManagement</option>
-              <option value="Flocks">Flocks</option>
-              <option value="DailyLogs">DailyLogs</option>
-              <option value="Health">Health / Vaccines</option>
-              <option value="Finance">Finance / Ledger</option>
-              <option value="Developer">SQL CLI / Dev</option>
-            </select>
-          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div>
+              <input
+                type="date"
+                title="Start Date"
+                value={auditFilters.startDate}
+                onChange={(e) => setAuditFilters({ ...auditFilters, startDate: e.target.value })}
+                className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs font-mono focus:outline-hidden"
+              />
+            </div>
 
-          <div>
-            <select
-              className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs focus:outline-hidden font-mono"
-              value={auditFilters.status}
-              onChange={(e) => setAuditFilters({ ...auditFilters, status: e.target.value })}
-            >
-              <option value="">-- Check Status --</option>
-              <option value="SUCCESS">SUCCESS</option>
-              <option value="FAILED">FAILED</option>
-            </select>
-          </div>
+            <div>
+              <input
+                type="date"
+                title="End Date"
+                value={auditFilters.endDate}
+                onChange={(e) => setAuditFilters({ ...auditFilters, endDate: e.target.value })}
+                className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs font-mono focus:outline-hidden"
+              />
+            </div>
 
-          <div className="flex gap-2">
-            <select
-              className="px-3 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs focus:outline-hidden font-mono"
-              value={auditFilters.limit}
-              onChange={(e) => setAuditFilters({ ...auditFilters, limit: e.target.value })}
-            >
-              <option value="25">25 rows</option>
-              <option value="50">50 rows</option>
-              <option value="100">100 rows</option>
-              <option value="300">300 rows</option>
-            </select>
+            <div>
+              <select
+                className="w-full px-3 py-2 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs focus:outline-hidden font-mono"
+                value={auditFilters.limit}
+                onChange={(e) => setAuditFilters({ ...auditFilters, limit: e.target.value })}
+              >
+                <option value="25">25 rows</option>
+                <option value="50">50 rows</option>
+                <option value="100">100 rows</option>
+                <option value="300">300 rows</option>
+              </select>
+            </div>
 
-            <button
-              onClick={() => fetchAuditLogs(selectedFarmId)}
-              className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 font-mono text-white text-xs font-semibold rounded-xl smooth-hover"
-            >
-              QUERY TRACE
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => fetchAuditLogs(selectedFarmId)}
+                className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 font-mono text-white text-xs font-semibold rounded-xl smooth-hover cursor-pointer"
+              >
+                QUERY TRACE
+              </button>
+              {(auditFilters.search || auditFilters.module || auditFilters.status || auditFilters.startDate || auditFilters.endDate) && (
+                <button
+                  onClick={() => {
+                    const resetFilters = { search: '', module: '', status: '', limit: '50', startDate: '', endDate: '' };
+                    setAuditFilters(resetFilters);
+                    const queryParams = new URLSearchParams({ ...resetFilters, farmId: String(selectedFarmId) }).toString();
+                    fetch(`/api/audit_logs_filtered?${queryParams}`, { headers: { 'x-farm-id': String(selectedFarmId) } })
+                      .then(res => res.json())
+                      .then(data => setAuditLogs(data));
+                  }}
+                  className="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-mono text-xs rounded-xl smooth-hover cursor-pointer"
+                  title="Clear all filters"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

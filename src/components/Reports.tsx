@@ -126,12 +126,19 @@ export default function Reports({ currentLanguage }: ReportsProps) {
       const json = await reportsService.getAllReportData(farmId);
       setData(json);
 
-      // Pre-populate date filters based on arrival/start of operations
-      if (json.dailyLogs && json.dailyLogs.length > 0) {
-        const firstDate = json.dailyLogs[0].LogDate;
-        const lastDate = json.dailyLogs[json.dailyLogs.length - 1].LogDate;
-        setStartDate(firstDate);
-        setEndDate(lastDate);
+      // Pre-populate date filters based on arrival/start of operations across all records
+      const allDates: string[] = [];
+      (json.dailyLogs || []).forEach((l: any) => l.LogDate && allDates.push(l.LogDate.split('T')[0]));
+      (json.transactions || []).forEach((t: any) => t.Date && allDates.push(t.Date.split('T')[0]));
+      (json.sales || []).forEach((s: any) => s.SaleDate && allDates.push(s.SaleDate.split('T')[0]));
+      (json.purchases || []).forEach((p: any) => p.PurchaseDate && allDates.push(p.PurchaseDate.split('T')[0]));
+      (json.flocks || []).forEach((f: any) => (f.StartDate || f.ArrivalDate) && allDates.push((f.StartDate || f.ArrivalDate).split('T')[0]));
+
+      allDates.sort();
+      if (allDates.length > 0) {
+        const todayStr = new Date().toISOString().split('T')[0];
+        setStartDate(allDates[0]);
+        setEndDate(allDates[allDates.length - 1] > todayStr ? allDates[allDates.length - 1] : todayStr);
       } else {
         const todayStr = new Date().toISOString().split('T')[0];
         setStartDate(todayStr);

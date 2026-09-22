@@ -53,8 +53,11 @@ export interface Flock {
 
 export interface DailyLog {
   Id: number;
+  FarmId?: number;
   FlockId: number;
+  FlockName?: string;
   FeedItemId: number | null;
+  FeedItemName?: string;
   FeedConsumedKg: number;
   MortalityCount: number;
   EggsCollected: number;
@@ -71,6 +74,13 @@ export interface DailyLog {
   EggsGiftedValue?: number;
   CustomEggPrice?: number | null;
   CustomBirdPrice?: number | null;
+  OpeningBirds?: number;
+  ClosingBirds?: number;
+  SoldBirdsToday?: number;
+  AgeInDaysAtLog?: number | null;
+  HdepToday?: number;
+  HdpToday?: number;
+  HhpToday?: number;
 }
 
 export interface Vaccination {

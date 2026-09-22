@@ -14,6 +14,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Language, translations } from '../translations';
+import { useFarm } from '../context/FarmContext';
 
 const bulkImportTranslations: Record<Language, any> = {
   en: {
@@ -64,6 +65,8 @@ interface ParseResponse {
 export default function BulkImport({ currentLanguage }: BulkImportProps) {
   const bt = bulkImportTranslations[currentLanguage] || bulkImportTranslations['en'];
   const t = translations[currentLanguage];
+  const { currentFarm } = useFarm();
+  const farmId = currentFarm?.Id || 1;
   const [selectedType, setSelectedType] = useState<ImportType>('items');
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [fileName, setFileName] = useState<string>('');
@@ -175,11 +178,13 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': token ? `Bearer ${token}` : '',
-          'x-user-email': localStorage.getItem('userEmail') || 'operator@farm.com'
+          'x-user-email': localStorage.getItem('userEmail') || 'operator@farm.com',
+          'X-Farm-Id': String(farmId)
         },
         body: JSON.stringify({
           type: selectedType,
-          csvData: rawCsv
+          csvData: rawCsv,
+          farmId
         })
       });
 
@@ -209,11 +214,13 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': token ? `Bearer ${token}` : '',
-          'x-user-email': localStorage.getItem('userEmail') || 'operator@farm.com'
+          'x-user-email': localStorage.getItem('userEmail') || 'operator@farm.com',
+          'X-Farm-Id': String(farmId)
         },
         body: JSON.stringify({
           type: selectedType,
-          records: parseResult.records
+          records: parseResult.records,
+          farmId
         })
       });
 
@@ -227,6 +234,9 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
       setFileName('');
       setCsvText('');
       if (fileInputRef.current) fileInputRef.current.value = '';
+
+      // Signal components across the app to refresh their data
+      window.dispatchEvent(new CustomEvent('farm-data-updated'));
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed saving spreadsheet data. Check database constraints.');
     } finally {

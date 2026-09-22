@@ -26,18 +26,54 @@ export async function getAverageLandedCost(inventoryId: number | null): Promise<
 }
 
 // Helper to write audit logs
-export async function logAudit(req: Request | null, email: string, module: string, action: string, params: any, status: 'SUCCESS' | 'FAILED', exceptionMsg: string = '') {
+export async function logAudit(
+  req: Request | null,
+  email: string,
+  module: string,
+  action: string,
+  params: any,
+  status: 'SUCCESS' | 'FAILED',
+  exceptionMsg: string = '',
+  explicitFarmId?: number | string
+) {
   try {
-    const userEmail = email || req?.headers['x-user-email'] as string || 'Guest';
+    const userEmail = email || (req?.headers['x-user-email'] as string) || (req?.body?.userEmail as string) || 'Guest';
     const ipAddress = req?.ip || '';
     const httpMethod = req?.method || '';
     const url = req?.originalUrl || '';
-    const paramStr = JSON.stringify(params || {});
+    const paramStr = typeof params === 'string' ? params : JSON.stringify(params || {});
+    const farmId = Number(
+      explicitFarmId ||
+      req?.headers['x-farm-id'] ||
+      req?.query?.farmId ||
+      req?.body?.farmId ||
+      1
+    );
     
     await query.run(`
-      INSERT INTO AuditLogs (UserEmail, Module, Action, Parameters, Status, ExceptionMessage, IpAddress, HttpMethod, Url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [userEmail, module, action, paramStr, status, exceptionMsg, ipAddress, httpMethod, url]);
+      INSERT INTO AuditLogs (FarmId, UserEmail, Module, Action, Parameters, Status, ExceptionMessage, IpAddress, HttpMethod, Url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [farmId, userEmail, module, action, paramStr, status, exceptionMsg, ipAddress, httpMethod, url]);
+
+    if (supabaseServer) {
+      try {
+        await supabaseServer.from('AuditLogs').insert([
+          {
+            FarmId: farmId,
+            UserEmail: userEmail,
+            Module: module,
+            Action: action,
+            Parameters: paramStr,
+            Status: status,
+            ExceptionMessage: exceptionMsg,
+            IpAddress: ipAddress,
+            HttpMethod: httpMethod,
+            Url: url,
+            Timestamp: new Date().toISOString()
+          }
+        ]);
+      } catch {}
+    }
   } catch (error) {
     console.error('Audit Logging Failed:', error);
   }
@@ -374,25 +410,34 @@ export const flockControllers = {
 export const dailyLogsControllers = {
   async list(req: Request, res: Response) {
     try {
-      const logs = await query.all(`
+      const targetFarmId = Number(req.query.farmId || req.headers['x-farm-id']) || null;
+      let logsQuery = `
         SELECT d.*, f.FlockName, f.ArrivalDate, f.StartDate, f.InitialCount, f.CurrentCount, i.ItemName as FeedItemName
         FROM DailyLogs d
         JOIN Flocks f ON d.FlockId = f.Id
         LEFT JOIN Inventories i ON d.FeedItemId = i.Id
-        ORDER BY d.LogDate ASC
-      `);
+      `;
+      const queryParams: any[] = [];
+      if (targetFarmId) {
+        logsQuery += ` WHERE (d.FarmId = ? OR f.FarmId = ?)`;
+        queryParams.push(targetFarmId, targetFarmId);
+      }
+      logsQuery += ` ORDER BY d.LogDate ASC`;
+
+      const logs = await query.all(logsQuery, queryParams);
 
       const birdSales = await query.all(`
         SELECT s.SaleDate, si.FlockId, SUM(si.Quantity) as SoldCount
         FROM SaleItems si
         JOIN Sales s ON si.SaleId = s.Id
-        WHERE si.ItemType = 'Bird'
+        WHERE si.ItemType = 'Bird' ${targetFarmId ? 'AND (s.FarmId = ? OR s.FarmId IS NULL)' : ''}
         GROUP BY s.SaleDate, si.FlockId
-      `);
+      `, targetFarmId ? [targetFarmId] : []);
 
       const salesMap: Record<string, number> = {};
       birdSales.forEach((s: any) => {
-        salesMap[`${s.FlockId}_${s.SaleDate}`] = s.SoldCount;
+        const sDate = (s.SaleDate || '').split('T')[0];
+        salesMap[`${s.FlockId}_${sDate}`] = s.SoldCount;
       });
 
       const runningBirdsCount: Record<number, number> = {};
@@ -402,13 +447,15 @@ export const dailyLogsControllers = {
         }
         const openingBirds = runningBirdsCount[log.FlockId];
         const dead = log.MortalityCount || 0;
-        const soldKey = `${log.FlockId}_${log.LogDate}`;
+        const eaten = log.BirdsEatenBySelf || 0;
+        const logDateKey = (log.LogDate || '').split('T')[0];
+        const soldKey = `${log.FlockId}_${logDateKey}`;
         const sold = salesMap[soldKey] || 0;
-        const closingBirds = Math.max(0, openingBirds - dead - sold);
+        const closingBirds = Math.max(0, openingBirds - dead - eaten - sold);
         runningBirdsCount[log.FlockId] = closingBirds;
 
         const startD = log.ArrivalDate || log.StartDate;
-        let ageInDays = null;
+        let ageInDays: number | null = null;
         if (startD) {
           const birth = new Date(startD);
           const logD = new Date(log.LogDate);
@@ -416,7 +463,13 @@ export const dailyLogsControllers = {
         }
 
         const totalEggsLaid = (log.EggsCollected || 0) + (log.DamagedEggsCollected || 0);
+        // HDEP % (HDD / Hen Day Egg Production) = (totalEggsLaid * 100) / closingBirds
         const hdep = closingBirds > 0 ? (totalEggsLaid * 100) / closingBirds : 0;
+        // HDP % (Hen Day Production based on opening count) = (totalEggsLaid * 100) / openingBirds
+        const hdp = openingBirds > 0 ? (totalEggsLaid * 100) / openingBirds : 0;
+        // HHP % (Hen Housed Production) = (totalEggsLaid * 100) / initialCount
+        const initialCount = Number(log.InitialCount) || 1;
+        const hhp = initialCount > 0 ? (totalEggsLaid * 100) / initialCount : 0;
 
         return {
           ...log,
@@ -424,7 +477,9 @@ export const dailyLogsControllers = {
           ClosingBirds: closingBirds,
           SoldBirdsToday: sold,
           AgeInDaysAtLog: ageInDays,
-          HdepToday: hdep
+          HdepToday: hdep,
+          HdpToday: hdp,
+          HhpToday: hhp
         };
       });
 
@@ -3172,49 +3227,69 @@ export const ledgerControllers = {
 export const sysDashboardControllers = {
   async getDashboardData(req: Request, res: Response) {
     try {
-      // 1. Total Active Birds
-      const flockStats = await query.get("SELECT IFNULL(SUM(CurrentCount), 0) as totalBirds FROM Flocks WHERE Status = 'Active'");
+      const farmId = Number(req.query.farmId || req.headers['x-farm-id']) || 1;
+
+      // 1. Total Active Birds for this farm
+      const flockStats = await query.get("SELECT IFNULL(SUM(CurrentCount), 0) as totalBirds FROM Flocks WHERE Status = 'Active' AND FarmId = ?", [farmId]);
       const totalBirds = flockStats ? flockStats.totalBirds : 0;
 
-      // 2. Eggs Collected
-      const freshEggs = await query.get("SELECT IFNULL(SUM(Quantity), 0) as qty FROM EggInventories WHERE GradeOrType = 'Fresh Eggs'");
-      const damagedEggs = await query.get("SELECT IFNULL(SUM(Quantity), 0) as qty FROM EggInventories WHERE GradeOrType = 'Damaged/Waste Eggs'");
+      // 2. Eggs in Stock for this farm
+      const freshEggs = await query.get("SELECT IFNULL(SUM(Quantity), 0) as qty FROM EggInventories WHERE GradeOrType = 'Fresh Eggs' AND FarmId = ?", [farmId]);
+      const damagedEggs = await query.get("SELECT IFNULL(SUM(Quantity), 0) as qty FROM EggInventories WHERE GradeOrType = 'Damaged/Waste Eggs' AND FarmId = ?", [farmId]);
       const freshCount = freshEggs ? freshEggs.qty : 0;
       const damagedCount = damagedEggs ? damagedEggs.qty : 0;
 
-      // 3. Outstanding Balances
-      const supplierCredit = await query.get("SELECT IFNULL(SUM(CurrentCreditBalance), 0) as bal FROM Suppliers");
-      const customerCredit = await query.get("SELECT IFNULL(SUM(CurrentCreditBalance), 0) as bal FROM Customers");
+      // 3. Outstanding Balances for this farm
+      const supplierCredit = await query.get("SELECT IFNULL(SUM(CurrentCreditBalance), 0) as bal FROM Suppliers WHERE FarmId = ?", [farmId]);
+      const customerCredit = await query.get("SELECT IFNULL(SUM(CurrentCreditBalance), 0) as bal FROM Customers WHERE FarmId = ?", [farmId]);
       const accountsPayable = supplierCredit ? supplierCredit.bal : 0;
       const accountsReceivable = customerCredit ? customerCredit.bal : 0;
 
-      // 4. Low stock levels
-      const lowStockAlerts = await query.all("SELECT ItemName, CurrentStock, MinThreshold, UnitOfMeasurement FROM Inventories WHERE CurrentStock < MinThreshold");
+      // 4. Low stock levels for this farm
+      const lowStockAlerts = await query.all("SELECT ItemName, CurrentStock, MinThreshold, UnitOfMeasurement FROM Inventories WHERE CurrentStock < MinThreshold AND FarmId = ?", [farmId]);
 
-      // 5. Incomes vs Expenses
-      const inflows = await query.get("SELECT IFNULL(SUM(Amount), 0) as sum FROM FinancialTransactions WHERE Type = 'Income'");
-      const outflows = await query.get("SELECT IFNULL(SUM(Amount), 0) as sum FROM FinancialTransactions WHERE Type = 'Expense'");
+      // 5. Incomes vs Expenses for this farm
+      const inflows = await query.get("SELECT IFNULL(SUM(Amount), 0) as sum FROM FinancialTransactions WHERE Type = 'Income' AND FarmId = ?", [farmId]);
+      const outflows = await query.get("SELECT IFNULL(SUM(Amount), 0) as sum FROM FinancialTransactions WHERE Type = 'Expense' AND FarmId = ?", [farmId]);
       const totalIncome = inflows ? inflows.sum : 0;
       const totalExpense = outflows ? outflows.sum : 0;
 
-      // 6. Laying rate (HDP) for entire active farm context
-      // Average lay rate for past 30 days
-      const totalProductionAccumulated = await query.get("SELECT IFNULL(SUM(EggsCollected),0) + IFNULL(SUM(DamagedEggsCollected),0) as totalEggs FROM DailyLogs");
-      const activeFlocksTotalChicks = await query.get("SELECT IFNULL(SUM(InitialCount),0) as totalInitial FROM Flocks WHERE Status='Active'");
+      // 6. Laying rate (HDP) for active flocks in this farm
+      const activeFlocks = await query.all("SELECT Id, InitialCount, CurrentCount, ArrivalDate, StartDate FROM Flocks WHERE Status = 'Active' AND FarmId = ?", [farmId]);
+      const dailyLogs = await query.all("SELECT FlockId, LogDate, EggsCollected, DamagedEggsCollected, MortalityCount FROM DailyLogs WHERE FarmId = ? ORDER BY LogDate ASC", [farmId]);
       
       let laymanRatePercentage = 0;
-      if (activeFlocksTotalChicks && activeFlocksTotalChicks.totalInitial > 0) {
-        laymanRatePercentage = Math.min(100, Math.max(0, (totalProductionAccumulated.totalEggs / (activeFlocksTotalChicks.totalInitial * 30)) * 100));
+      if (activeFlocks && activeFlocks.length > 0 && dailyLogs && dailyLogs.length > 0) {
+        let totalHdepSum = 0;
+        let loggedDaysCount = 0;
+
+        for (const flock of activeFlocks) {
+          const flockLogs = dailyLogs.filter((l: any) => l.FlockId === flock.Id);
+          let runningBirds = Number(flock.InitialCount) || Number(flock.CurrentCount) || 0;
+          
+          for (const log of flockLogs) {
+            const dead = Number(log.MortalityCount) || 0;
+            runningBirds = Math.max(0, runningBirds - dead);
+            const laid = (Number(log.EggsCollected) || 0) + (Number(log.DamagedEggsCollected) || 0);
+            const hdep = runningBirds > 0 ? (laid * 100) / runningBirds : 0;
+            totalHdepSum += Math.min(100, Math.max(0, hdep));
+            loggedDaysCount++;
+          }
+        }
+
+        if (loggedDaysCount > 0) {
+          laymanRatePercentage = totalHdepSum / loggedDaysCount;
+        }
       }
 
-      // 7. Per Egg Cost calculations (Overall country/farm index)
+      // 7. Per Egg Cost calculations (for this farm)
       const totalCostsRow = await query.get(`
         SELECT 
-          (SELECT IFNULL(SUM(TotalPurchasePrice), 0) FROM Flocks) as totalFlockPurchase,
-          (SELECT IFNULL(SUM(TotalFeedCost), 0) FROM Flocks) as totalFeed,
-          (SELECT IFNULL(SUM(Cost), 0) FROM Vaccinations) as totalVaccine
-      `);
-      const totalEggsLaidRow = await query.get("SELECT IFNULL(SUM(EggsCollected) + IFNULL(SUM(DamagedEggsCollected), 0), 0) as totalEggs FROM DailyLogs");
+          (SELECT IFNULL(SUM(TotalPurchasePrice), 0) FROM Flocks WHERE FarmId = ?) as totalFlockPurchase,
+          (SELECT IFNULL(SUM(TotalFeedCost), 0) FROM Flocks WHERE FarmId = ?) as totalFeed,
+          (SELECT IFNULL(SUM(Cost), 0) FROM Vaccinations WHERE FarmId = ?) as totalVaccine
+      `, [farmId, farmId, farmId]);
+      const totalEggsLaidRow = await query.get("SELECT IFNULL(SUM(EggsCollected) + IFNULL(SUM(DamagedEggsCollected), 0), 0) as totalEggs FROM DailyLogs WHERE FarmId = ?", [farmId]);
 
       const totalFlockPurchase = totalCostsRow ? totalCostsRow.totalFlockPurchase : 0;
       const totalFeed = totalCostsRow ? totalCostsRow.totalFeed : 0;
@@ -3223,18 +3298,16 @@ export const sysDashboardControllers = {
 
       const totalExpensesAccruedBase = totalFlockPurchase + totalFeed + totalVaccine;
 
-      // Extract all financial transaction totals
       const ledgerTotals = await query.get(`
         SELECT 
           SUM(CASE WHEN Type = 'Expense' THEN Amount ELSE 0 END) as totalAllExpenses,
           SUM(CASE WHEN Type = 'Income' THEN Amount ELSE 0 END) as totalAllIncomes
         FROM FinancialTransactions
-      `);
+        WHERE FarmId = ?
+      `, [farmId]);
       const txExpenses = ledgerTotals ? (ledgerTotals.totalAllExpenses || 0) : 0;
       const txIncomes = ledgerTotals ? (ledgerTotals.totalAllIncomes || 0) : 0;
 
-      // Safe expense pooling (considers either ledger expense or base accrued expenses, whichever is greater,
-      // to prevent losing track of unrecorded legacy flock costs, then factors in ledger incomes as offsets)
       const finalExpensesAccrued = Math.max(totalExpensesAccruedBase, txExpenses);
       const netExpensesAccrued = Math.max(0, finalExpensesAccrued - txIncomes);
 
@@ -3271,8 +3344,35 @@ export const sysDashboardControllers = {
 
   async getAuditLogs(req: Request, res: Response) {
     try {
-      const logs = await query.all('SELECT * FROM AuditLogs ORDER BY Timestamp DESC LIMIT 100');
+      const farmId = Number(req.query.farmId || req.headers['x-farm-id']);
+      let sql = 'SELECT * FROM AuditLogs';
+      const params: any[] = [];
+      if (farmId) {
+        sql += ' WHERE (FarmId = ? OR FarmId IS NULL)';
+        params.push(farmId);
+      }
+      sql += ' ORDER BY Timestamp DESC LIMIT 100';
+      const logs = await query.all(sql, params);
       res.json(logs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  },
+
+  async createAuditLog(req: Request, res: Response) {
+    try {
+      const { module, action, parameters, status, exceptionMsg, farmId, userEmail } = req.body;
+      await logAudit(
+        req,
+        userEmail || '',
+        module || 'General',
+        action || 'OPERATION',
+        parameters,
+        status || 'SUCCESS',
+        exceptionMsg || '',
+        farmId
+      );
+      res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

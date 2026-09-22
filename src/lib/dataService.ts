@@ -223,22 +223,131 @@ export const dailyLogService = {
    * Get all daily logs for a specific farm, optionally filtered by flock
    */
   async getDailyLogs(farmId: number, flockId?: number): Promise<DailyLog[]> {
-    let query = supabase
-      .from('DailyLogs')
-      .select('*')
-      .eq('FarmId', farmId)
-      .order('LogDate', { ascending: false });
+    let rawLogs: DailyLog[] = [];
+    try {
+      let query = supabase
+        .from('DailyLogs')
+        .select('*')
+        .eq('FarmId', farmId)
+        .order('LogDate', { ascending: true });
 
-    if (flockId) {
-      query = query.eq('FlockId', flockId);
+      if (flockId) {
+        query = query.eq('FlockId', flockId);
+      }
+
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        rawLogs = data;
+      }
+    } catch (err: any) {
+      console.warn('[dailyLogService.getDailyLogs] Supabase query notice:', err?.message);
     }
 
-    const { data, error } = await query;
-    if (error) {
-      console.error('[dailyLogService.getDailyLogs] Error:', error.message);
-      throw error;
+    // Fallback to local server API if Supabase returned nothing or errored
+    if (!rawLogs || rawLogs.length === 0) {
+      try {
+        const fallbackRes = await fetch(`/api/daily_logs?farmId=${farmId}${flockId ? `&flockId=${flockId}` : ''}`);
+        if (fallbackRes.ok) {
+          const fallbackData = await fallbackRes.json();
+          if (Array.isArray(fallbackData) && fallbackData.length > 0) {
+            return fallbackData; // API endpoint already enriches with metrics
+          }
+        }
+      } catch (fallbackErr) {
+        console.warn('[dailyLogService.getDailyLogs] Fallback API notice:', fallbackErr);
+      }
     }
-    return data || [];
+
+    if (!rawLogs || rawLogs.length === 0) {
+      return [];
+    }
+
+    // Enrich logs with FlockName, FeedItemName, Age, ClosingStock, and HDD / HDEP metrics
+    try {
+      const [flocksRes, inventoriesRes, salesRes] = await Promise.all([
+        supabase.from('Flocks').select('Id, FlockName, ArrivalDate, StartDate, InitialCount, CurrentCount').eq('FarmId', farmId),
+        supabase.from('Inventories').select('Id, ItemName').eq('FarmId', farmId),
+        supabase.from('Sales').select('Id, SaleDate').eq('FarmId', farmId)
+      ]);
+
+      const flocksMap = new Map((flocksRes.data || []).map((f: any) => [f.Id, f]));
+      const invMap = new Map((inventoriesRes.data || []).map((i: any) => [i.Id, i.ItemName]));
+
+      // Bird sales per date per flock
+      const saleIds = (salesRes.data || []).map((s: any) => s.Id);
+      const salesMap: Record<string, number> = {};
+      if (saleIds.length > 0) {
+        const { data: birdSaleItems } = await supabase
+          .from('SaleItems')
+          .select('SaleId, FlockId, Quantity')
+          .eq('ItemType', 'Bird')
+          .in('SaleId', saleIds);
+
+        const salesDateMap = new Map((salesRes.data || []).map((s: any) => [s.Id, s.SaleDate]));
+        (birdSaleItems || []).forEach((si: any) => {
+          const sDate = salesDateMap.get(si.SaleId);
+          if (sDate && si.FlockId) {
+            const key = `${si.FlockId}_${(sDate || '').split('T')[0]}`;
+            salesMap[key] = (salesMap[key] || 0) + (Number(si.Quantity) || 0);
+          }
+        });
+      }
+
+      const runningBirdsCount: Record<number, number> = {};
+      const enrichedLogs = rawLogs.map((log: any) => {
+        const flock = flocksMap.get(log.FlockId);
+        if (runningBirdsCount[log.FlockId] === undefined) {
+          runningBirdsCount[log.FlockId] = flock ? Number(flock.InitialCount) || Number(flock.CurrentCount) || 0 : 0;
+        }
+
+        const openingBirds = runningBirdsCount[log.FlockId];
+        const dead = Number(log.MortalityCount) || 0;
+        const eaten = Number(log.BirdsEatenBySelf) || 0;
+        const logDateKey = (log.LogDate || '').split('T')[0];
+        const soldKey = `${log.FlockId}_${logDateKey}`;
+        const sold = salesMap[soldKey] || 0;
+
+        const closingBirds = Math.max(0, openingBirds - dead - eaten - sold);
+        runningBirdsCount[log.FlockId] = closingBirds;
+
+        const startD = flock?.ArrivalDate || flock?.StartDate;
+        let ageInDays: number | null = null;
+        if (startD) {
+          const birth = new Date(startD);
+          const logD = new Date(log.LogDate);
+          ageInDays = Math.max(0, Math.floor((logD.getTime() - birth.getTime()) / (1000 * 60 * 60 * 24)));
+        }
+
+        const totalEggsLaid = (Number(log.EggsCollected) || 0) + (Number(log.DamagedEggsCollected) || 0);
+        // HDEP % (HDD / Hen Day Egg Production) = (totalEggsLaid * 100) / closingBirds
+        const hdep = closingBirds > 0 ? (totalEggsLaid * 100) / closingBirds : 0;
+        // HDP % (Hen Day Production based on opening count) = (totalEggsLaid * 100) / openingBirds
+        const hdp = openingBirds > 0 ? (totalEggsLaid * 100) / openingBirds : 0;
+        // HHP % (Hen Housed Production) = (totalEggsLaid * 100) / initialCount
+        const initialCount = flock ? Number(flock.InitialCount) || 1 : 1;
+        const hhp = initialCount > 0 ? (totalEggsLaid * 100) / initialCount : 0;
+
+        return {
+          ...log,
+          FlockName: flock?.FlockName || log.FlockName || `Flock #${log.FlockId}`,
+          FeedItemName: invMap.get(log.FeedItemId) || log.FeedItemName || 'Manual Feed',
+          OpeningBirds: openingBirds,
+          ClosingBirds: closingBirds,
+          SoldBirdsToday: sold,
+          AgeInDaysAtLog: ageInDays,
+          HdepToday: hdep,
+          HdpToday: hdp,
+          HhpToday: hhp
+        };
+      });
+
+      // Sort newest date first
+      enrichedLogs.reverse();
+      return enrichedLogs;
+    } catch (enrichErr) {
+      console.warn('[dailyLogService.getDailyLogs] Enrichment notice:', enrichErr);
+      return rawLogs.reverse();
+    }
   },
 
   /**
@@ -2599,13 +2708,32 @@ export const reportsService = {
       const totalIncome = txs.filter((t: any) => t.Type === 'Income').reduce((sum: number, t: any) => sum + (Number(t.Amount) || 0), 0);
       const totalExpense = txs.filter((t: any) => t.Type === 'Expense').reduce((sum: number, t: any) => sum + (Number(t.Amount) || 0), 0);
 
-      // 6. Laying Rate (HDP)
-      const totalEggsLaid = dailyLogs.reduce((sum: number, l: any) => sum + (Number(l.EggsCollected) || 0) + (Number(l.DamagedEggsCollected) || 0), 0);
+      // 6. Laying Rate (HDP) - Computed consistently with Performance Report
       let laymanRatePercentage = 0;
-      if (totalInitialChicks > 0) {
-        const daysCount = Math.max(1, Math.min(30, dailyLogs.length));
-        laymanRatePercentage = Math.min(100, Math.max(0, (totalEggsLaid / (totalInitialChicks * daysCount)) * 100));
+      if (activeFlocks.length > 0 && dailyLogs.length > 0) {
+        let totalHdepSum = 0;
+        let loggedDaysCount = 0;
+
+        for (const flock of activeFlocks) {
+          const flockLogs = dailyLogs.filter((l: any) => l.FlockId === flock.Id);
+          let runningBirds = Number(flock.InitialCount) || Number(flock.CurrentCount) || 0;
+          
+          for (const log of flockLogs) {
+            const dead = Number(log.MortalityCount) || 0;
+            runningBirds = Math.max(0, runningBirds - dead);
+            const laid = (Number(log.EggsCollected) || 0) + (Number(log.DamagedEggsCollected) || 0);
+            const hdep = runningBirds > 0 ? (laid * 100) / runningBirds : 0;
+            totalHdepSum += Math.min(100, Math.max(0, hdep));
+            loggedDaysCount++;
+          }
+        }
+
+        if (loggedDaysCount > 0) {
+          laymanRatePercentage = totalHdepSum / loggedDaysCount;
+        }
       }
+
+      const totalEggsLaid = dailyLogs.reduce((sum: number, l: any) => sum + (Number(l.EggsCollected) || 0) + (Number(l.DamagedEggsCollected) || 0), 0);
 
       // 7. Per Egg Cost calculations
       const totalFlockPurchase = flocks.reduce((sum: number, f: any) => sum + (Number(f.TotalPurchasePrice) || 0), 0);
@@ -2663,6 +2791,38 @@ export const reportsService = {
       const stats = await res.json();
       return { stats, dailyLogTrend: [], financeTrend: [] };
     }
+  }
+};
+
+export const auditLogService = {
+  async logAction(
+    farmId: number | string,
+    module: string,
+    action: string,
+    parameters: any,
+    status: 'SUCCESS' | 'FAILED' = 'SUCCESS',
+    exceptionMsg: string = ''
+  ) {
+    try {
+      const userEmail = localStorage.getItem('userEmail') || 'System';
+      await fetch('/api/audit_logs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-farm-id': String(farmId),
+          'x-user-email': userEmail
+        },
+        body: JSON.stringify({
+          farmId: Number(farmId) || 1,
+          module,
+          action,
+          parameters: typeof parameters === 'string' ? parameters : JSON.stringify(parameters),
+          status,
+          exceptionMsg,
+          userEmail
+        })
+      }).catch(() => {});
+    } catch {}
   }
 };
 

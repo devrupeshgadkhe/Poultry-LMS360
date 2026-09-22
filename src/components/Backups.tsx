@@ -196,6 +196,7 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
       setSelectedFile(null);
       setStagedBackupData(null);
       fetchStatusAndBackups();
+      window.dispatchEvent(new CustomEvent('farm-data-updated'));
 
       // Trigger automatic reload countdown for fully responsive sync
       setCountdown(3);

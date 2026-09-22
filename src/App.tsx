@@ -28,7 +28,8 @@ import {
   EyeOff,
   CheckCircle2,
   Sparkles,
-  Layers
+  Layers,
+  History
 } from 'lucide-react';
 import farmHeroImage from './assets/images/poultry_farm_hero_1789227033408.jpg';
 
@@ -69,6 +70,7 @@ type Tab =
   | 'Legacy Migrator'
   | 'User Access'
   | 'Backups'
+  | 'Audit Logs'
   | 'Reports & Ledgers'
   | 'Farm Settings & Access'
   | 'Bulk Data Import';
@@ -370,6 +372,9 @@ export default function App() {
     if (tabName === 'Backups') {
       return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
     }
+    if (tabName === 'Audit Logs') {
+      return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
+    }
     if (tabName === 'Bulk Data Import') {
       return userRole === 'Admin' || hasPermission('bulkimport.view') || hasPermission('admin');
     }
@@ -424,6 +429,7 @@ export default function App() {
     { name: 'User Access', icon: Key, roles: ['Developer', 'Admin'] },
     { name: 'SQL CLI Console', icon: Database, roles: ['Developer'] },
     { name: 'Backups', icon: Cloud, roles: ['Developer', 'Admin'], permission: 'settings.view' },
+    { name: 'Audit Logs', icon: History, roles: ['Developer', 'Admin'], permission: 'settings.view' },
     { name: 'Farm Settings & Access', icon: Settings, roles: ['Developer', 'Admin'], permission: 'settings.view' },
   ];
 
@@ -803,6 +809,8 @@ export default function App() {
         return <DeveloperTools currentLanguage={currentLanguage} />;
       case 'Backups':
         return <Backups currentLanguage={currentLanguage} />;
+      case 'Audit Logs':
+        return <SettingsAudit currentLanguage={currentLanguage} />;
       case 'Farm Settings & Access':
         return <SettingsAudit currentLanguage={currentLanguage} />;
       case 'Bulk Data Import':

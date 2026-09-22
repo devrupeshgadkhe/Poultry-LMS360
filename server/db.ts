@@ -637,6 +637,7 @@ export async function initializeDatabase() {
   await query.run(`
     CREATE TABLE IF NOT EXISTS AuditLogs (
       Id INTEGER PRIMARY KEY AUTOINCREMENT,
+      FarmId INTEGER DEFAULT 1,
       Timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
       UserEmail TEXT,
       Module TEXT,
@@ -650,6 +651,15 @@ export async function initializeDatabase() {
       Url TEXT
     )
   `);
+
+  try {
+    const auditCols = await query.all("PRAGMA table_info(AuditLogs)");
+    if (auditCols && !auditCols.some((c: any) => c.name === 'FarmId')) {
+      await query.run("ALTER TABLE AuditLogs ADD COLUMN FarmId INTEGER DEFAULT 1");
+    }
+  } catch (err: any) {
+    console.warn('AuditLogs FarmId migration check:', err.message);
+  }
 
   // JavascriptErrors table (Specifically for runtime exceptions / unhandled failures)
   await query.run(`

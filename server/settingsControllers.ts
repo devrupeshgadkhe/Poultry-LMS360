@@ -563,14 +563,21 @@ export const userManagementControllers = {
   // GET /api/audit_logs_filtered
   async getAuditLogsFiltered(req: Request, res: Response) {
     try {
-      const { search, module, status, limit } = req.query;
+      const { search, module, status, limit, startDate, endDate } = req.query;
+      const farmId = Number(req.query.farmId || req.headers['x-farm-id']);
+
       let sql = 'SELECT * FROM AuditLogs';
       const params: any[] = [];
       const conditions: string[] = [];
 
+      if (farmId) {
+        conditions.push('(FarmId = ? OR FarmId IS NULL)');
+        params.push(farmId);
+      }
+
       if (search) {
-        conditions.push('(UserEmail LIKE ? OR Action LIKE ? OR Parameters LIKE ? OR ExceptionMessage LIKE ?)');
-        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+        conditions.push('(UserEmail LIKE ? OR Action LIKE ? OR Parameters LIKE ? OR ExceptionMessage LIKE ? OR Module LIKE ?)');
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
       }
       if (module) {
         conditions.push('Module = ?');
@@ -579,6 +586,14 @@ export const userManagementControllers = {
       if (status) {
         conditions.push('Status = ?');
         params.push(status);
+      }
+      if (startDate) {
+        conditions.push('Timestamp >= ?');
+        params.push(`${startDate} 00:00:00`);
+      }
+      if (endDate) {
+        conditions.push('Timestamp <= ?');
+        params.push(`${endDate} 23:59:59`);
       }
 
       if (conditions.length > 0) {

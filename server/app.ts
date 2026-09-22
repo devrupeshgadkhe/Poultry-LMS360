@@ -193,23 +193,25 @@ apiRouter.delete('/ledgers/transactions/:id', ledgerControllers.deleteTransactio
 // 11. Dashboard Analytics & Logs Tracker
 apiRouter.get('/reports/all-data', async (req, res) => {
   try {
-    const flocks = await query.all('SELECT * FROM Flocks');
-    const dailyLogs = await query.all('SELECT * FROM DailyLogs ORDER BY LogDate ASC');
-    const vaccinations = await query.all('SELECT * FROM Vaccinations ORDER BY Date ASC');
-    const inventories = await query.all('SELECT * FROM Inventories');
-    const eggInventories = await query.all('SELECT * FROM EggInventories');
-    const customers = await query.all('SELECT * FROM Customers');
-    const suppliers = await query.all('SELECT * FROM Suppliers');
-    const purchases = await query.all('SELECT * FROM Purchases ORDER BY PurchaseDate ASC');
-    const purchaseItems = await query.all('SELECT * FROM PurchaseItems');
-    const purchaseExtraExpenses = await query.all('SELECT * FROM PurchaseExtraExpenses');
-    const sales = await query.all('SELECT * FROM Sales ORDER BY SaleDate ASC');
-    const saleItems = await query.all('SELECT * FROM SaleItems');
-    const recipes = await query.all('SELECT * FROM FoodRecipes');
-    const recipeIngredients = await query.all('SELECT * FROM RecipeIngredients');
-    const transactions = await query.all('SELECT * FROM FinancialTransactions ORDER BY Date ASC');
-    const categories = await query.all('SELECT * FROM TransactionCategories');
-    const staff = await query.all('SELECT * FROM Staff');
+    const farmId = Number(req.query.farmId || req.headers['x-farm-id']) || 1;
+
+    const flocks = await query.all('SELECT * FROM Flocks WHERE FarmId = ?', [farmId]);
+    const dailyLogs = await query.all('SELECT * FROM DailyLogs WHERE FarmId = ? ORDER BY LogDate ASC', [farmId]);
+    const vaccinations = await query.all('SELECT * FROM Vaccinations WHERE FarmId = ? ORDER BY Date ASC', [farmId]);
+    const inventories = await query.all('SELECT * FROM Inventories WHERE FarmId = ?', [farmId]);
+    const eggInventories = await query.all('SELECT * FROM EggInventories WHERE FarmId = ?', [farmId]);
+    const customers = await query.all('SELECT * FROM Customers WHERE FarmId = ?', [farmId]);
+    const suppliers = await query.all('SELECT * FROM Suppliers WHERE FarmId = ?', [farmId]);
+    const purchases = await query.all('SELECT * FROM Purchases WHERE FarmId = ? ORDER BY PurchaseDate ASC', [farmId]);
+    const purchaseItems = await query.all('SELECT pi.* FROM PurchaseItems pi INNER JOIN Purchases p ON pi.PurchaseId = p.Id WHERE p.FarmId = ?', [farmId]);
+    const purchaseExtraExpenses = await query.all('SELECT pe.* FROM PurchaseExtraExpenses pe INNER JOIN Purchases p ON pe.PurchaseId = p.Id WHERE p.FarmId = ?', [farmId]);
+    const sales = await query.all('SELECT * FROM Sales WHERE FarmId = ? ORDER BY SaleDate ASC', [farmId]);
+    const saleItems = await query.all('SELECT si.* FROM SaleItems si INNER JOIN Sales s ON si.SaleId = s.Id WHERE s.FarmId = ?', [farmId]);
+    const recipes = await query.all('SELECT * FROM FoodRecipes WHERE FarmId = ?', [farmId]);
+    const recipeIngredients = await query.all('SELECT ri.* FROM RecipeIngredients ri INNER JOIN FoodRecipes fr ON ri.RecipeId = fr.Id WHERE fr.FarmId = ?', [farmId]);
+    const transactions = await query.all('SELECT * FROM FinancialTransactions WHERE FarmId = ? ORDER BY Date ASC', [farmId]);
+    const categories = await query.all('SELECT * FROM TransactionCategories WHERE FarmId = ?', [farmId]);
+    const staff = await query.all('SELECT * FROM Staff WHERE FarmId = ?', [farmId]);
 
     res.json({
       flocks,
@@ -237,6 +239,7 @@ apiRouter.get('/reports/all-data', async (req, res) => {
 
 apiRouter.get('/dashboard', sysDashboardControllers.getDashboardData);
 apiRouter.get('/audit_logs', sysDashboardControllers.getAuditLogs);
+apiRouter.post('/audit_logs', sysDashboardControllers.createAuditLog);
 apiRouter.post('/admin/sql', sysDashboardControllers.runRawSql);
 apiRouter.post('/errors/log', sysDashboardControllers.logJavascriptError);
 apiRouter.get('/errors', sysDashboardControllers.getJavascriptErrors);

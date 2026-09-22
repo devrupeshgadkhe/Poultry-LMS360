@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { query } from './db.js';
 import { logAudit } from './controllers.js';
+import { syncRecordToSupabase } from './supabase.js';
 
 // Custom lightweight CSV parser
 export function parseCSV(text: string): string[][] {
@@ -39,6 +40,7 @@ export const bulkImportControllers = {
   // POST /api/bulk-import/parse
   async parseImportData(req: Request, res: Response) {
     const { type, csvData } = req.body;
+    const targetFarmId = Number(req.body.farmId || req.query.farmId || req.headers['x-farm-id']) || 1;
     try {
       if (!type || !csvData) {
         return res.status(400).json({ error: 'Import type and CSV data are required fields.' });
@@ -60,28 +62,44 @@ export const bulkImportControllers = {
         invalid: 0
       };
 
-      // To lookup inventories, flocks, suppliers, customers to pre-validate
-      const inventories = await query.all<{ Id: number, ItemName: string }>('SELECT Id, ItemName FROM Inventories');
-      const flocks = await query.all<{ Id: number, FlockName: string }>('SELECT Id, FlockName FROM Flocks');
-      const suppliers = await query.all<{ Id: number, CompanyName: string }>('SELECT Id, CompanyName FROM Suppliers');
-      const customers = await query.all<{ Id: number, FullName: string }>('SELECT Id, FullName FROM Customers');
-      const eggInventories = await query.all<{ Id: number, GradeOrType: string }>('SELECT Id, GradeOrType FROM EggInventories');
+      // To lookup inventories, flocks, suppliers, customers to pre-validate scoped to farm
+      const inventories = await query.all<{ Id: number, ItemName: string, FarmId: number }>(
+        'SELECT Id, ItemName, FarmId FROM Inventories WHERE FarmId = ? OR FarmId IS NULL',
+        [targetFarmId]
+      );
+      const flocks = await query.all<{ Id: number, FlockName: string, FarmId: number }>(
+        'SELECT Id, FlockName, FarmId FROM Flocks WHERE FarmId = ? OR FarmId IS NULL',
+        [targetFarmId]
+      );
+      const allFlocks = await query.all<{ Id: number, FlockName: string, FarmId: number }>('SELECT Id, FlockName, FarmId FROM Flocks');
+      const suppliers = await query.all<{ Id: number, CompanyName: string, FarmId: number }>(
+        'SELECT Id, CompanyName, FarmId FROM Suppliers WHERE FarmId = ? OR FarmId IS NULL',
+        [targetFarmId]
+      );
+      const customers = await query.all<{ Id: number, FullName: string, FarmId: number }>(
+        'SELECT Id, FullName, FarmId FROM Customers WHERE FarmId = ? OR FarmId IS NULL',
+        [targetFarmId]
+      );
+      const eggInventories = await query.all<{ Id: number, GradeOrType: string, FarmId: number }>(
+        'SELECT Id, GradeOrType, FarmId FROM EggInventories WHERE FarmId = ? OR FarmId IS NULL',
+        [targetFarmId]
+      );
 
-      // Existing core tables for duplicate detection
+      // Existing core tables for duplicate detection scoped by FarmId
       const existingInvs = new Set(inventories.map(inv => inv.ItemName.toLowerCase().trim()));
       
       const existingPurchasesInvoices = new Set(
-        (await query.all<{ InvoiceNumber: string }>('SELECT InvoiceNumber FROM Purchases WHERE InvoiceNumber IS NOT NULL AND InvoiceNumber != ""'))
+        (await query.all<{ InvoiceNumber: string }>('SELECT InvoiceNumber FROM Purchases WHERE (FarmId = ? OR FarmId IS NULL) AND InvoiceNumber IS NOT NULL AND InvoiceNumber != ""', [targetFarmId]))
           .map(p => p.InvoiceNumber.toLowerCase().trim())
       );
 
       const existingSalesInvoices = new Set(
-        (await query.all<{ InvoiceNumber: string }>('SELECT InvoiceNumber FROM Sales WHERE InvoiceNumber IS NOT NULL AND InvoiceNumber != ""'))
+        (await query.all<{ InvoiceNumber: string }>('SELECT InvoiceNumber FROM Sales WHERE (FarmId = ? OR FarmId IS NULL) AND InvoiceNumber IS NOT NULL AND InvoiceNumber != ""', [targetFarmId]))
           .map(s => s.InvoiceNumber.toLowerCase().trim())
       );
 
-      const existingDailyLogs = await query.all<{ FlockId: number, LogDate: string }>('SELECT FlockId, LogDate FROM DailyLogs');
-      const dailyLogSet = new Set(existingDailyLogs.map(log => `${log.FlockId}_${log.LogDate}`));
+      const existingDailyLogs = await query.all<{ FlockId: number, LogDate: string }>('SELECT FlockId, LogDate FROM DailyLogs WHERE FarmId = ? OR FarmId IS NULL', [targetFarmId]);
+      const dailyLogSet = new Set(existingDailyLogs.map(log => `${log.FlockId}_${(log.LogDate || '').split('T')[0]}`));
 
       for (let index = 0; index < dataRows.length; index++) {
         const rawRow = dataRows[index];
@@ -148,12 +166,17 @@ export const bulkImportControllers = {
             status = 'Invalid';
           }
 
-          const matchedFlock = flocks.find(f => f.FlockName.toLowerCase().trim() === flockName.toLowerCase().trim());
+          let matchedFlock = flocks.find(f => f.FlockName.toLowerCase().trim() === flockName.toLowerCase().trim());
+          if (!matchedFlock) {
+            matchedFlock = allFlocks.find(f => f.FlockName.toLowerCase().trim() === flockName.toLowerCase().trim());
+          }
+
           if (!matchedFlock) {
             errors.push(`Flock name "${flockName}" is not registered in DB`);
             status = 'Invalid';
           } else {
             record._flockId = matchedFlock.Id;
+            record._farmId = matchedFlock.FarmId || targetFarmId;
             const logKey = `${matchedFlock.Id}_${logDate}`;
             if (dailyLogSet.has(logKey)) {
               status = 'Duplicate';
@@ -349,6 +372,7 @@ export const bulkImportControllers = {
   // POST /api/bulk-import/commit
   async commitImportData(req: Request, res: Response) {
     const { type, records } = req.body;
+    const targetFarmId = Number(req.body.farmId || req.query.farmId || req.headers['x-farm-id']) || 1;
     try {
       if (!type || !records || !Array.isArray(records)) {
         return res.status(400).json({ error: 'Import type and valid records array are required.' });
@@ -368,7 +392,7 @@ export const bulkImportControllers = {
           const name = rec.ItemName;
           
           // Re-verify duplicates inside the transaction to avoid race conditions
-          const exists = await query.get('SELECT Id FROM Inventories WHERE ItemName = ?', [name]);
+          const exists = await query.get('SELECT Id FROM Inventories WHERE ItemName = ? AND (FarmId = ? OR FarmId IS NULL)', [name, targetFarmId]);
           if (exists) {
             duplicateSkipCount++;
             continue;
@@ -383,11 +407,26 @@ export const bulkImportControllers = {
           const threshold = parseFloat(rec.MinThreshold || '0');
           const notes = rec.Notes || '';
 
-          await query.run(`
-            INSERT INTO Inventories (ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [name, cat, uom, unitPrice, sellPrice, stock, weight, threshold, notes]);
+          const insertRes = await query.run(`
+            INSERT INTO Inventories (FarmId, ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [targetFarmId, name, cat, uom, unitPrice, sellPrice, stock, weight, threshold, notes]);
+          const itemId = insertRes.lastID;
           saveCount++;
+
+          syncRecordToSupabase('Inventories', {
+            Id: itemId,
+            FarmId: targetFarmId,
+            ItemName: name,
+            Category: cat,
+            UnitOfMeasurement: uom,
+            UnitPrice: unitPrice,
+            SellingPrice: sellPrice,
+            CurrentStock: stock,
+            WeightPerUnit: weight,
+            MinThreshold: threshold,
+            Notes: notes
+          });
         }
 
       } else if (type === 'daily-logs') {
@@ -402,6 +441,10 @@ export const bulkImportControllers = {
             duplicateSkipCount++;
             continue;
           }
+
+          // Ensure correct FarmId is derived from Flock
+          const flock = await query.get<{ Id: number, FarmId: number, TotalFeedCost: number, CurrentCount: number, Status: string, PerBirdPurchasePrice: number }>('SELECT * FROM Flocks WHERE Id = ?', [flockId]);
+          const rowFarmId = (flock && flock.FarmId) ? flock.FarmId : (rec._farmId || targetFarmId);
 
           const feedConsumed = parseFloat(rec.FeedConsumedKg || '0');
           const mortality = parseInt(rec.MortalityCount || '0');
@@ -418,70 +461,113 @@ export const bulkImportControllers = {
           // Look up or fallback/create feed item dynamically
           let feedItemId = rec._feedItemId || null;
           let feedUnitPrice = 30.00;
-          let matchedFeedItem = null;
+          let matchedFeedItem: any = null;
 
           if (feedItemId) {
             matchedFeedItem = await query.get("SELECT * FROM Inventories WHERE Id = ?", [feedItemId]);
           } else {
             const feedNameInput = rec.FeedName || '';
             if (feedNameInput) {
-              matchedFeedItem = await query.get("SELECT * FROM Inventories WHERE ItemName = ?", [feedNameInput]);
+              matchedFeedItem = await query.get("SELECT * FROM Inventories WHERE (FarmId = ? OR FarmId IS NULL) AND ItemName = ?", [rowFarmId, feedNameInput]);
             }
             if (!matchedFeedItem) {
-              matchedFeedItem = await query.get("SELECT * FROM Inventories WHERE Category = 'Feed' LIMIT 1");
+              matchedFeedItem = await query.get("SELECT * FROM Inventories WHERE (FarmId = ? OR FarmId IS NULL) AND Category = 'Feed' LIMIT 1", [rowFarmId]);
             }
             if (!matchedFeedItem && feedConsumed > 0) {
               // Auto create Default Feed item
               const insertFeed = await query.run(`
-                INSERT INTO Inventories (ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
-                VALUES ('Default Feed', 'Feed', 'Kg', 30.00, 0, 0, 1, 0, 'Auto-created default feed for historical tracking')
-              `);
-              matchedFeedItem = { Id: insertFeed.lastID, ItemName: 'Default Feed', UnitPrice: 30.00, CurrentStock: 0 };
+                INSERT INTO Inventories (FarmId, ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
+                VALUES (?, 'Default Feed', 'Feed', 'Kg', 30.00, 0, 0, 1, 0, 'Auto-created default feed for historical tracking')
+              `, [rowFarmId]);
+              matchedFeedItem = { Id: insertFeed.lastID, FarmId: rowFarmId, ItemName: 'Default Feed', UnitPrice: 30.00, CurrentStock: 0 };
+              syncRecordToSupabase('Inventories', {
+                Id: insertFeed.lastID,
+                FarmId: rowFarmId,
+                ItemName: 'Default Feed',
+                Category: 'Feed',
+                UnitOfMeasurement: 'Kg',
+                UnitPrice: 30.00,
+                SellingPrice: 0,
+                CurrentStock: 0,
+                WeightPerUnit: 1,
+                MinThreshold: 0,
+                Notes: 'Auto-created default feed for historical tracking'
+              });
             }
           }
 
           if (matchedFeedItem) {
             feedItemId = matchedFeedItem.Id;
             feedUnitPrice = matchedFeedItem.UnitPrice || 30.00;
+            if (feedConsumed > 0) {
+              await query.run('UPDATE Inventories SET CurrentStock = CurrentStock - ? WHERE Id = ?', [feedConsumed, feedItemId]);
+              syncRecordToSupabase('Inventories', {
+                Id: feedItemId,
+                FarmId: rowFarmId,
+                CurrentStock: (matchedFeedItem.CurrentStock || 0) - feedConsumed
+              });
+            }
           }
 
           const feedCost = feedConsumed * feedUnitPrice;
+          const dailyBirdCost = (flock && flock.PerBirdPurchasePrice) ? flock.PerBirdPurchasePrice : 0;
 
-          // Insert Daily Log
+          // Insert Daily Log with rowFarmId
           const logInsertResult = await query.run(`
             INSERT INTO DailyLogs (
-              FlockId, FeedItemId, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, 
+              FarmId, FlockId, FeedItemId, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, 
               FeedCost, DailyBirdCost, Notes, DailyAverageWeight, WaterConsumed,
               BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `, [
-            flockId, feedItemId, feedConsumed, mortality, eggs, damagedEggs, logDate, 
-            feedCost, notes, weight, water,
+            rowFarmId, flockId, feedItemId, feedConsumed, mortality, eggs, damagedEggs, logDate, 
+            feedCost, dailyBirdCost, notes, weight, water,
             birdsEatenBySelf, birdsEatenValue, eggsGifted, eggsGiftedValue
           ]);
 
           const logId = logInsertResult.lastID;
 
-          // Deduct consumed feed from Inventories (Allow negative stock)
-          if (feedItemId && feedConsumed > 0) {
-            await query.run('UPDATE Inventories SET CurrentStock = CurrentStock - ? WHERE Id = ?', [feedConsumed, feedItemId]);
-          }
+          // Sync DailyLog to Supabase
+          syncRecordToSupabase('DailyLogs', {
+            Id: logId,
+            FarmId: rowFarmId,
+            FlockId: flockId,
+            FeedItemId: feedItemId,
+            FeedConsumedKg: feedConsumed,
+            MortalityCount: mortality,
+            EggsCollected: eggs,
+            DamagedEggsCollected: damagedEggs,
+            LogDate: logDate,
+            FeedCost: feedCost,
+            DailyBirdCost: dailyBirdCost,
+            Notes: notes,
+            DailyAverageWeight: weight,
+            WaterConsumed: water,
+            BirdsEatenBySelf: birdsEatenBySelf,
+            BirdsEatenValue: birdsEatenValue,
+            EggsGifted: eggsGifted,
+            EggsGiftedValue: eggsGiftedValue
+          });
 
-          // Update current flock head count live (Allow negative stock) & Total Feed Cost
-          const flock = await query.get<{ TotalFeedCost: number, CurrentCount: number, Status: string, PerBirdPurchasePrice: number }>('SELECT * FROM Flocks WHERE Id = ?', [flockId]);
+          // Update current flock head count live & Total Feed Cost
+          let updatedFeedCost = feedCost;
+          let newCurrentCount = 0;
+          let status = 'Active';
           if (flock) {
-            const updatedFeedCost = (flock.TotalFeedCost || 0) + feedCost;
+            updatedFeedCost = (flock.TotalFeedCost || 0) + feedCost;
             const totalBirdsRemoved = mortality + birdsEatenBySelf;
-            const newCurrentCount = flock.CurrentCount - totalBirdsRemoved;
-            const status = newCurrentCount <= 0 ? 'Inactive' : flock.Status;
+            newCurrentCount = Math.max(0, flock.CurrentCount - totalBirdsRemoved);
+            status = newCurrentCount <= 0 ? 'Inactive' : flock.Status;
 
             await query.run('UPDATE Flocks SET TotalFeedCost = ?, CurrentCount = ?, Status = ? WHERE Id = ?', [updatedFeedCost, newCurrentCount, status, flockId]);
-
-            // Update daily bird cost in the imported daily log if flock was loaded
-            if (flock.PerBirdPurchasePrice > 0) {
-              await query.run('UPDATE DailyLogs SET DailyBirdCost = ? WHERE Id = ?', [flock.PerBirdPurchasePrice, logId]);
-            }
+            syncRecordToSupabase('Flocks', {
+              Id: flockId,
+              FarmId: rowFarmId,
+              CurrentCount: newCurrentCount,
+              TotalFeedCost: updatedFeedCost,
+              Status: status
+            });
           }
 
           // Net Fresh Eggs added / removed (collected - gifted. Allow negative stock)
@@ -490,74 +576,122 @@ export const bulkImportControllers = {
             await query.run(`
               UPDATE EggInventories 
               SET Quantity = Quantity + ? 
-              WHERE GradeOrType = 'Fresh Eggs'
-            `, [netFreshEggs]);
+              WHERE GradeOrType = 'Fresh Eggs' AND (FarmId = ? OR FarmId IS NULL)
+            `, [netFreshEggs, rowFarmId]);
+            const eggRow = await query.get<{ Id: number, Quantity: number }>("SELECT Id, Quantity FROM EggInventories WHERE GradeOrType = 'Fresh Eggs' AND (FarmId = ? OR FarmId IS NULL) LIMIT 1", [rowFarmId]);
+            if (eggRow) {
+              syncRecordToSupabase('EggInventories', {
+                Id: eggRow.Id,
+                FarmId: rowFarmId,
+                GradeOrType: 'Fresh Eggs',
+                Quantity: eggRow.Quantity
+              });
+            }
           }
 
           if (damagedEggs > 0) {
             await query.run(`
               UPDATE EggInventories 
               SET Quantity = Quantity + ? 
-              WHERE GradeOrType = 'Damaged/Waste Eggs'
-            `, [damagedEggs]);
+              WHERE GradeOrType = 'Damaged/Waste Eggs' AND (FarmId = ? OR FarmId IS NULL)
+            `, [damagedEggs, rowFarmId]);
+            const eggWasteRow = await query.get<{ Id: number, Quantity: number }>("SELECT Id, Quantity FROM EggInventories WHERE GradeOrType = 'Damaged/Waste Eggs' AND (FarmId = ? OR FarmId IS NULL) LIMIT 1", [rowFarmId]);
+            if (eggWasteRow) {
+              syncRecordToSupabase('EggInventories', {
+                Id: eggWasteRow.Id,
+                FarmId: rowFarmId,
+                GradeOrType: 'Damaged/Waste Eggs',
+                Quantity: eggWasteRow.Quantity
+              });
+            }
           }
 
           // Financial transaction for Feed Consumption
           if (feedCost > 0) {
-            let catId;
+            let catId = 9;
             const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Feed Consumption'");
             if (catObj) {
               catId = catObj.Id;
             } else {
               const insertCat = await query.run(`
-                INSERT INTO TransactionCategories (Name, IsIncome, Description)
-                VALUES ('Feed Consumption', 0, 'Feed consumed by active bird flocks')
-              `);
+                INSERT INTO TransactionCategories (FarmId, Name, IsIncome, Description)
+                VALUES (?, 'Feed Consumption', 0, 'Feed consumed by active bird flocks')
+              `, [rowFarmId]);
               catId = insertCat.lastID;
             }
             const feedName = matchedFeedItem ? matchedFeedItem.ItemName : 'Feed';
-            await query.run(`
-              INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-              VALUES (?, ?, 'Expense', ?, ?, ?)
-            `, [logDate, feedCost, catId, `[DailyLog #${logId}] Consume ${feedConsumed} Kg of ${feedName}`, flockId]);
+            const txRes = await query.run(`
+              INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+              VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+            `, [rowFarmId, logDate, feedCost, catId, `[DailyLog #${logId}] Consume ${feedConsumed} Kg of ${feedName}`, flockId]);
+            syncRecordToSupabase('FinancialTransactions', {
+              Id: txRes.lastID,
+              FarmId: rowFarmId,
+              Date: logDate,
+              Amount: feedCost,
+              Type: 'Expense',
+              CategoryId: catId,
+              Notes: `[DailyLog #${logId}] Consume ${feedConsumed} Kg of ${feedName}`,
+              FlockId: flockId
+            });
           }
 
           // Financial transaction for Personal Consumption
           if (birdsEatenBySelf > 0 && birdsEatenValue > 0) {
-            let catId;
+            let catId = 10;
             const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Personal Consumption'");
             if (catObj) {
               catId = catObj.Id;
             } else {
               const insertCat = await query.run(`
-                INSERT INTO TransactionCategories (Name, IsIncome, Description)
-                VALUES ('Personal Consumption', 0, 'Internal birds eaten by self')
-              `);
+                INSERT INTO TransactionCategories (FarmId, Name, IsIncome, Description)
+                VALUES (?, 'Personal Consumption', 0, 'Internal birds eaten by self')
+              `, [rowFarmId]);
               catId = insertCat.lastID;
             }
-            await query.run(`
-              INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-              VALUES (?, ?, 'Expense', ?, ?, ?)
-            `, [logDate, birdsEatenBySelf * birdsEatenValue, catId, `[DailyLog #${logId}] Birds eaten by self: ${birdsEatenBySelf} birds`, flockId]);
+            const txRes = await query.run(`
+              INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+              VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+            `, [rowFarmId, logDate, birdsEatenBySelf * birdsEatenValue, catId, `[DailyLog #${logId}] Birds eaten by self: ${birdsEatenBySelf} birds`, flockId]);
+            syncRecordToSupabase('FinancialTransactions', {
+              Id: txRes.lastID,
+              FarmId: rowFarmId,
+              Date: logDate,
+              Amount: birdsEatenBySelf * birdsEatenValue,
+              Type: 'Expense',
+              CategoryId: catId,
+              Notes: `[DailyLog #${logId}] Birds eaten by self: ${birdsEatenBySelf} birds`,
+              FlockId: flockId
+            });
           }
 
           // Financial transaction for Gifts & Donations
           if (eggsGifted > 0 && eggsGiftedValue > 0) {
-            let catId;
+            let catId = 11;
             const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Gifts & Donations'");
             if (catObj) {
               catId = catObj.Id;
             } else {
               const insertCat = await query.run(`
-                INSERT INTO TransactionCategories (Name, IsIncome, Description)
-                VALUES ('Gifts & Donations', 0, 'Internal and external gifted eggs/birds')
-              `);
+                INSERT INTO TransactionCategories (FarmId, Name, IsIncome, Description)
+                VALUES (?, 'Gifts & Donations', 0, 'Internal and external gifted eggs/birds')
+              `, [rowFarmId]);
               catId = insertCat.lastID;
             }
-            await query.run(`
-              INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, FlockId)
-              VALUES (?, ?, 'Expense', ?, ?, ?)
-            `, [logDate, eggsGifted * eggsGiftedValue, catId, `[DailyLog #${logId}] Eggs gifted: ${eggsGifted} eggs`, flockId]);
+            const txRes = await query.run(`
+              INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
+              VALUES (?, ?, ?, 'Expense', ?, ?, ?)
+            `, [rowFarmId, logDate, eggsGifted * eggsGiftedValue, catId, `[DailyLog #${logId}] Eggs gifted: ${eggsGifted} eggs`, flockId]);
+            syncRecordToSupabase('FinancialTransactions', {
+              Id: txRes.lastID,
+              FarmId: rowFarmId,
+              Date: logDate,
+              Amount: eggsGifted * eggsGiftedValue,
+              Type: 'Expense',
+              CategoryId: catId,
+              Notes: `[DailyLog #${logId}] Eggs gifted: ${eggsGifted} eggs`,
+              FlockId: flockId
+            });
           }
 
           saveCount++;
@@ -569,7 +703,7 @@ export const bulkImportControllers = {
           const invoiceNo = rec.InvoiceNumber || '';
           
           if (invoiceNo) {
-            const exists = await query.get('SELECT Id FROM Purchases WHERE InvoiceNumber = ?', [invoiceNo]);
+            const exists = await query.get('SELECT Id FROM Purchases WHERE InvoiceNumber = ? AND (FarmId = ? OR FarmId IS NULL)', [invoiceNo, targetFarmId]);
             if (exists) {
               duplicateSkipCount++;
               continue;
@@ -580,15 +714,26 @@ export const bulkImportControllers = {
           let supplierId = rec._supplierId;
           if (!supplierId) {
             const supplierName = rec.SupplierName;
-            const existingSupplier = await query.get<{ Id: number }>('SELECT Id FROM Suppliers WHERE CompanyName = ?', [supplierName]);
+            const existingSupplier = await query.get<{ Id: number }>('SELECT Id FROM Suppliers WHERE (FarmId = ? OR FarmId IS NULL) AND CompanyName = ?', [targetFarmId, supplierName]);
             if (existingSupplier) {
               supplierId = existingSupplier.Id;
             } else {
               const newSup = await query.run(`
-                INSERT INTO Suppliers (CompanyName, ContactPerson, Email, Phone, OpeningCreditBalance, CurrentCreditBalance, Address)
-                VALUES (?, '', '', '', 0, 0, '')
-              `, [supplierName]);
+                INSERT INTO Suppliers (FarmId, CompanyName, ContactPerson, Email, Phone, OpeningCreditBalance, CurrentCreditBalance, Address)
+                VALUES (?, ?, '', '', '', 0, 0, '')
+              `, [targetFarmId, supplierName]);
               supplierId = newSup.lastID;
+              syncRecordToSupabase('Suppliers', {
+                Id: supplierId,
+                FarmId: targetFarmId,
+                CompanyName: supplierName,
+                ContactPerson: '',
+                Email: '',
+                Phone: '',
+                OpeningCreditBalance: 0,
+                CurrentCreditBalance: 0,
+                Address: ''
+              });
             }
           }
 
@@ -609,18 +754,47 @@ export const bulkImportControllers = {
 
           // 1. Insert parent purchase row
           const pResult = await query.run(`
-            INSERT INTO Purchases (SupplierId, PurchaseDate, TotalAmount, TotalGSTAmount, OtherTaxes, ReceivedAmount, BalanceAmount, InvoiceNumber, Status, Notes)
-            VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-          `, [supplierId, purchaseDate, grandTotal, gstAmount, receivedAmt, balanceAmt, invoiceNo, status, notes]);
+            INSERT INTO Purchases (FarmId, SupplierId, PurchaseDate, TotalAmount, TotalGSTAmount, OtherTaxes, ReceivedAmount, BalanceAmount, InvoiceNumber, Status, Notes)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+          `, [targetFarmId, supplierId, purchaseDate, grandTotal, gstAmount, receivedAmt, balanceAmt, invoiceNo, status, notes]);
           
           const purchaseId = pResult.lastID;
+          syncRecordToSupabase('Purchases', {
+            Id: purchaseId,
+            FarmId: targetFarmId,
+            SupplierId: supplierId,
+            PurchaseDate: purchaseDate,
+            TotalAmount: grandTotal,
+            TotalGSTAmount: gstAmount,
+            OtherTaxes: 0,
+            ReceivedAmount: receivedAmt,
+            BalanceAmount: balanceAmt,
+            InvoiceNumber: invoiceNo,
+            Status: status,
+            Notes: notes
+          });
 
           // 2. Insert child item details
           let inventoryId = rec._inventoryId || null;
-          await query.run(`
+          const piResult = await query.run(`
             INSERT INTO PurchaseItems (PurchaseId, InventoryId, ItemType, Quantity, UnitPrice, GSTPercentage, GSTAmount, TotalPrice, WeightPerUnit, AllocatedOverhead, FinalLandedAmount)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
           `, [purchaseId, inventoryId, itemType, qty, price, gstPerc, gstAmount, totalPrice, grandTotal]);
+
+          syncRecordToSupabase('PurchaseItems', {
+            Id: piResult.lastID,
+            PurchaseId: purchaseId,
+            InventoryId: inventoryId,
+            ItemType: itemType,
+            Quantity: qty,
+            UnitPrice: price,
+            GSTPercentage: gstPerc,
+            GSTAmount: gstAmount,
+            TotalPrice: totalPrice,
+            WeightPerUnit: 1,
+            AllocatedOverhead: 0,
+            FinalLandedAmount: grandTotal
+          });
 
           // 3. Keep stock index synced and update items unit price
           if (inventoryId) {
@@ -636,6 +810,13 @@ export const bulkImportControllers = {
                 SET CurrentStock = CurrentStock + ?, UnitPrice = ?
                 WHERE Id = ?
               `, [qty, newUnitPrice, inventoryId]);
+
+              syncRecordToSupabase('Inventories', {
+                Id: inventoryId,
+                FarmId: targetFarmId,
+                CurrentStock: newStock,
+                UnitPrice: newUnitPrice
+              });
             }
           }
 
@@ -651,7 +832,7 @@ export const bulkImportControllers = {
           const invoiceNo = rec.InvoiceNumber || '';
 
           if (invoiceNo) {
-            const exists = await query.get('SELECT Id FROM Sales WHERE InvoiceNumber = ?', [invoiceNo]);
+            const exists = await query.get('SELECT Id FROM Sales WHERE InvoiceNumber = ? AND (FarmId = ? OR FarmId IS NULL)', [invoiceNo, targetFarmId]);
             if (exists) {
               duplicateSkipCount++;
               continue;
@@ -662,15 +843,26 @@ export const bulkImportControllers = {
           let customerId = rec._customerId;
           if (!customerId) {
             const customerName = rec.CustomerName;
-            const existingCustomer = await query.get<{ Id: number }>('SELECT Id FROM Customers WHERE FullName = ?', [customerName]);
+            const existingCustomer = await query.get<{ Id: number }>('SELECT Id FROM Customers WHERE (FarmId = ? OR FarmId IS NULL) AND FullName = ?', [targetFarmId, customerName]);
             if (existingCustomer) {
               customerId = existingCustomer.Id;
             } else {
               const newCust = await query.run(`
-                INSERT INTO Customers (FullName, Email, Phone, Company, OpeningCreditBalance, CurrentCreditBalance, Address)
-                VALUES (?, '', '', '', 0, 0, '')
-              `, [customerName]);
+                INSERT INTO Customers (FarmId, FullName, Email, Phone, Company, OpeningCreditBalance, CurrentCreditBalance, Address)
+                VALUES (?, ?, '', '', '', 0, 0, '')
+              `, [targetFarmId, customerName]);
               customerId = newCust.lastID;
+              syncRecordToSupabase('Customers', {
+                Id: customerId,
+                FarmId: targetFarmId,
+                FullName: customerName,
+                Email: '',
+                Phone: '',
+                Company: '',
+                OpeningCreditBalance: 0,
+                CurrentCreditBalance: 0,
+                Address: ''
+              });
             }
           }
 
@@ -693,46 +885,117 @@ export const bulkImportControllers = {
 
           // 1. Save Parent Sales record
           const sResult = await query.run(`
-            INSERT INTO Sales (CustomerId, SaleDate, SubTotal, Discount, TotalGSTAmount, OtherCharges, GrandTotal, ReceivedAmount, InvoiceNumber, Status, Notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [customerId, saleDate, subTotal, discount, gstAmount, otherCharges, grandTotal, receivedAmt, invoiceNo, status, notes]);
+            INSERT INTO Sales (FarmId, CustomerId, SaleDate, SubTotal, Discount, TotalGSTAmount, OtherCharges, GrandTotal, ReceivedAmount, InvoiceNumber, Status, Notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [targetFarmId, customerId, saleDate, subTotal, discount, gstAmount, otherCharges, grandTotal, receivedAmt, invoiceNo, status, notes]);
 
           const saleId = sResult.lastID;
+          syncRecordToSupabase('Sales', {
+            Id: saleId,
+            FarmId: targetFarmId,
+            CustomerId: customerId,
+            SaleDate: saleDate,
+            SubTotal: subTotal,
+            Discount: discount,
+            TotalGSTAmount: gstAmount,
+            OtherCharges: otherCharges,
+            GrandTotal: grandTotal,
+            ReceivedAmount: receivedAmt,
+            InvoiceNumber: invoiceNo,
+            Status: status,
+            Notes: notes
+          });
 
           // 2. Map items & Deduct Stock Cascades
           const flockId = rec._flockId || null;
           const eggInventoryId = rec._eggInventoryId || null;
           const inventoryId = rec._inventoryId || null;
 
-          await query.run(`
+          const siResult = await query.run(`
             INSERT INTO SaleItems (SaleId, ItemType, FlockId, EggInventoryId, InventoryId, Quantity, UnitPrice, GSTPercentage, GSTAmount, TotalPrice)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `, [saleId, itemType, flockId, eggInventoryId, inventoryId, qty, price, gstPerc, gstAmount, subTotal]);
 
+          syncRecordToSupabase('SaleItems', {
+            Id: siResult.lastID,
+            SaleId: saleId,
+            ItemType: itemType,
+            FlockId: flockId,
+            EggInventoryId: eggInventoryId,
+            InventoryId: inventoryId,
+            Quantity: qty,
+            UnitPrice: price,
+            GSTPercentage: gstPerc,
+            GSTAmount: gstAmount,
+            TotalPrice: subTotal
+          });
+
           // Cascading stock deductions
           if (itemType === 'Egg' && eggInventoryId) {
             await query.run('UPDATE EggInventories SET Quantity = MAX(0, Quantity - ?) WHERE Id = ?', [qty, eggInventoryId]);
+            const eggRow = await query.get<{ Quantity: number }>('SELECT Quantity FROM EggInventories WHERE Id = ?', [eggInventoryId]);
+            if (eggRow) {
+              syncRecordToSupabase('EggInventories', {
+                Id: eggInventoryId,
+                FarmId: targetFarmId,
+                Quantity: eggRow.Quantity
+              });
+            }
           } else if (itemType === 'Bird' && flockId) {
             const flock = await query.get<{ CurrentCount: number, Status: string }>('SELECT CurrentCount, Status FROM Flocks WHERE Id = ?', [flockId]);
             if (flock) {
               const newBirdCount = Math.max(0, flock.CurrentCount - qty);
               const flockStatus = newBirdCount === 0 ? 'Sold' : flock.Status;
               await query.run('UPDATE Flocks SET CurrentCount = ?, Status = ? WHERE Id = ?', [newBirdCount, flockStatus, flockId]);
+              syncRecordToSupabase('Flocks', {
+                Id: flockId,
+                FarmId: targetFarmId,
+                CurrentCount: newBirdCount,
+                Status: flockStatus
+              });
             }
           } else if (inventoryId) {
             await query.run('UPDATE Inventories SET CurrentStock = MAX(0, CurrentStock - ?) WHERE Id = ?', [qty, inventoryId]);
+            const invRow = await query.get<{ CurrentStock: number }>('SELECT CurrentStock FROM Inventories WHERE Id = ?', [inventoryId]);
+            if (invRow) {
+              syncRecordToSupabase('Inventories', {
+                Id: inventoryId,
+                FarmId: targetFarmId,
+                CurrentStock: invRow.CurrentStock
+              });
+            }
           }
 
           // Balance account credit adjustment
           if (balanceAmt > 0) {
             await query.run('UPDATE Customers SET CurrentCreditBalance = CurrentCreditBalance + ? WHERE Id = ?', [balanceAmt, customerId]);
+            const custRow = await query.get<{ CurrentCreditBalance: number }>('SELECT CurrentCreditBalance FROM Customers WHERE Id = ?', [customerId]);
+            if (custRow) {
+              syncRecordToSupabase('Customers', {
+                Id: customerId,
+                FarmId: targetFarmId,
+                CurrentCreditBalance: custRow.CurrentCreditBalance
+              });
+            }
           }
 
           // Auto trigger simple transaction ledger entry for ledger parity
-          await query.run(`
-            INSERT INTO FinancialTransactions (CategoryId, Date, Amount, Notes, Type, StaffId, SupplierId, CustomerId, Reference)
-            VALUES (?, ?, ?, ?, 'Income', NULL, NULL, ?, ?)
-          `, [financialCatId, saleDate, receivedAmt || grandTotal, `Bulk Upload Sale - Invoice: ${invoiceNo}`, customerId, invoiceNo]);
+          const ftRes = await query.run(`
+            INSERT INTO FinancialTransactions (FarmId, CategoryId, Date, Amount, Notes, Type, StaffId, SupplierId, CustomerId, Reference)
+            VALUES (?, ?, ?, ?, ?, 'Income', NULL, NULL, ?, ?)
+          `, [targetFarmId, financialCatId, saleDate, receivedAmt || grandTotal, `Bulk Upload Sale - Invoice: ${invoiceNo}`, customerId, invoiceNo]);
+
+          syncRecordToSupabase('FinancialTransactions', {
+            Id: ftRes.lastID,
+            FarmId: targetFarmId,
+            CategoryId: financialCatId,
+            Date: saleDate,
+            Amount: receivedAmt || grandTotal,
+            Notes: `Bulk Upload Sale - Invoice: ${invoiceNo}`,
+            Type: 'Income',
+            CustomerId: customerId,
+            Reference: invoiceNo
+          });
 
           saveCount++;
         }

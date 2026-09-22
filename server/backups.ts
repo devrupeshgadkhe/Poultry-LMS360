@@ -156,19 +156,40 @@ export async function restoreBackupData(backup: any, targetFarmId?: number): Pro
   await query.run('PRAGMA foreign_keys = OFF');
 
   try {
-    // 2. Drop all tables FIRST (outside massive transaction to avoid SQLite schema locked errors)
-    for (const table of backupToRestore.tables) {
-      await query.run(`DROP TABLE IF EXISTS \`${table.name}\``);
-    }
-
-    // 3. Recreate all table structures from the backup schema
-    for (const table of backupToRestore.tables) {
-      if (table.schema) {
-        await query.run(table.schema);
+    // 2. Schema check / Table recreation:
+    if (!targetFarmId) {
+      // Full database restore: drop and recreate schema
+      for (const table of backupToRestore.tables) {
+        await query.run(`DROP TABLE IF EXISTS \`${table.name}\``);
       }
+      for (const table of backupToRestore.tables) {
+        if (table.schema) {
+          await query.run(table.schema);
+        }
+      }
+    } else {
+      // Scoped restore: First purge all dependent child records for assignedFarmId to guarantee a clean overwrite
+      try {
+        await query.run(`DELETE FROM SaleItems WHERE SaleId IN (SELECT Id FROM Sales WHERE FarmId = ?)`, [assignedFarmId]);
+      } catch {}
+      try {
+        await query.run(`DELETE FROM SaleReturnItems WHERE SaleReturnId IN (SELECT Id FROM SaleReturns WHERE FarmId = ?)`, [assignedFarmId]);
+      } catch {}
+      try {
+        await query.run(`DELETE FROM PurchaseItems WHERE PurchaseId IN (SELECT Id FROM Purchases WHERE FarmId = ?)`, [assignedFarmId]);
+      } catch {}
+      try {
+        await query.run(`DELETE FROM PurchaseExtraExpenses WHERE PurchaseId IN (SELECT Id FROM Purchases WHERE FarmId = ?)`, [assignedFarmId]);
+      } catch {}
+      try {
+        await query.run(`DELETE FROM PurchaseReturnItems WHERE PurchaseReturnId IN (SELECT Id FROM PurchaseReturns WHERE FarmId = ?)`, [assignedFarmId]);
+      } catch {}
+      try {
+        await query.run(`DELETE FROM RecipeIngredients WHERE RecipeId IN (SELECT Id FROM FoodRecipes WHERE FarmId = ?)`, [assignedFarmId]);
+      } catch {}
     }
 
-    // 4. Ensure all multi-tenant tables have the FarmId column
+    // 3. Ensure all multi-tenant tables have the FarmId column
     for (const tblName of MULTI_TENANT_TABLES) {
       try {
         const cols = await query.all(`PRAGMA table_info(\`${tblName}\`)`);
@@ -183,7 +204,20 @@ export async function restoreBackupData(backup: any, targetFarmId?: number): Pro
       }
     }
 
-    // 5. Populate rows inside a transaction for atomic speed & stability
+    // 4. Purge any existing records in SQLite for this farm to ensure a complete overwrite
+    for (const tblName of MULTI_TENANT_TABLES) {
+      if (tblName === 'Users') continue; // Preserve login user accounts
+      try {
+        const cols = await query.all(`PRAGMA table_info(\`${tblName}\`)`);
+        if (cols && cols.some((c: any) => c.name === 'FarmId')) {
+          await query.run(`DELETE FROM \`${tblName}\` WHERE FarmId = ?`, [assignedFarmId]);
+        }
+      } catch (e: any) {
+        // ignore if table doesn't exist yet
+      }
+    }
+
+    // 6. Populate rows inside a transaction for atomic speed & stability
     await query.run('BEGIN TRANSACTION');
     try {
       for (const table of backupToRestore.tables) {
@@ -231,28 +265,28 @@ export async function restoreBackupData(backup: any, targetFarmId?: number): Pro
       throw insertErr;
     }
 
-    // 6. Ensure default EggInventories exist for the assigned farm
+    // 7. Ensure default EggInventories exist for the assigned farm
     try {
       const freshEggs = await query.get("SELECT Id FROM EggInventories WHERE FarmId = ? AND GradeOrType = 'Fresh Eggs'", [assignedFarmId]);
       if (!freshEggs) {
-        await query.run("INSERT INTO EggInventories (FarmId, GradeOrType, Quantity, UnitPrice, Notes) VALUES (?, 'Fresh Eggs', 0, 5.0, 'Default Fresh Eggs')", [assignedFarmId]);
+        await query.run("INSERT INTO EggInventories (FarmId, GradeOrType, Quantity, UnitPrice) VALUES (?, 'Fresh Eggs', 0, 5.0)", [assignedFarmId]);
       }
       const damagedEggs = await query.get("SELECT Id FROM EggInventories WHERE FarmId = ? AND GradeOrType = 'Damaged/Waste Eggs'", [assignedFarmId]);
       if (!damagedEggs) {
-        await query.run("INSERT INTO EggInventories (FarmId, GradeOrType, Quantity, UnitPrice, Notes) VALUES (?, 'Damaged/Waste Eggs', 0, 0.0, 'Default Damaged Eggs')", [assignedFarmId]);
+        await query.run("INSERT INTO EggInventories (FarmId, GradeOrType, Quantity, UnitPrice) VALUES (?, 'Damaged/Waste Eggs', 0, 0.0)", [assignedFarmId]);
       }
     } catch (eggErr) {
       console.warn('[Restore] Egg inventory check warning:', eggErr);
     }
 
-    // 7. Ensure modern tables and columns exist across the database
+    // 8. Ensure modern tables and columns exist across the database
     try {
       await initializeDatabase();
     } catch (initErr: any) {
       console.warn('[Restore] Database initialization warning:', initErr.message);
     }
 
-    // 8. Update FarmSettings & Farms table if FarmSettings was restored
+    // 9. Update FarmSettings & Farms table if FarmSettings was restored
     try {
       const farmSettingsTable = backupToRestore.tables.find(t => t.name === 'FarmSettings');
       if (farmSettingsTable && farmSettingsTable.rows && farmSettingsTable.rows.length > 0) {
@@ -268,11 +302,85 @@ export async function restoreBackupData(backup: any, targetFarmId?: number): Pro
       console.warn('[Restore] Farm sync warning:', farmErr.message);
     }
 
-    // 9. Sync the restored data to Supabase Cloud so all devices see the restored data
+    // 10. Completely OVERWRITE Supabase Cloud:
+    // First, delete all existing data for assignedFarmId so NO old entries merge with the restored backup.
     if (supabaseServer) {
       try {
-        console.log(`[Restore] Syncing restored tables to Supabase Cloud for Farm #${assignedFarmId}...`);
+        console.log(`[Restore] Purging all existing cloud data for Farm #${assignedFarmId} to guarantee a clean overwrite...`);
+        
+        // A. Remove dependent child records first
+        try {
+          const { data: oldSales } = await supabaseServer.from('Sales').select('Id').eq('FarmId', assignedFarmId);
+          const oldSaleIds = (oldSales || []).map((s: any) => s.Id);
+          if (oldSaleIds.length > 0) {
+            for (let i = 0; i < oldSaleIds.length; i += 50) {
+              await supabaseServer.from('SaleItems').delete().in('SaleId', oldSaleIds.slice(i, i + 50));
+            }
+          }
+        } catch (e: any) {
+          console.warn('[Restore] Cloud SaleItems cleanup:', e.message);
+        }
+
+        try {
+          const { data: oldPurchases } = await supabaseServer.from('Purchases').select('Id').eq('FarmId', assignedFarmId);
+          const oldPurchaseIds = (oldPurchases || []).map((p: any) => p.Id);
+          if (oldPurchaseIds.length > 0) {
+            for (let i = 0; i < oldPurchaseIds.length; i += 50) {
+              await supabaseServer.from('PurchaseItems').delete().in('PurchaseId', oldPurchaseIds.slice(i, i + 50));
+              await supabaseServer.from('PurchaseExtraExpenses').delete().in('PurchaseId', oldPurchaseIds.slice(i, i + 50));
+            }
+          }
+        } catch (e: any) {
+          console.warn('[Restore] Cloud PurchaseItems cleanup:', e.message);
+        }
+
+        try {
+          const { data: oldRecipes } = await supabaseServer.from('FoodRecipes').select('Id').eq('FarmId', assignedFarmId);
+          const oldRecipeIds = (oldRecipes || []).map((r: any) => r.Id);
+          if (oldRecipeIds.length > 0) {
+            for (let i = 0; i < oldRecipeIds.length; i += 50) {
+              await supabaseServer.from('RecipeIngredients').delete().in('RecipeId', oldRecipeIds.slice(i, i + 50));
+            }
+          }
+        } catch (e: any) {
+          console.warn('[Restore] Cloud RecipeIngredients cleanup:', e.message);
+        }
+
+        // B. Delete all records belonging to assignedFarmId across all multi-tenant tables
+        const cloudTablesToPurge = [
+          'SaleReturns',
+          'PurchaseReturns',
+          'Sales',
+          'Purchases',
+          'DailyLogs',
+          'Vaccinations',
+          'FeedProductionLogs',
+          'FoodRecipes',
+          'FinancialTransactions',
+          'TransactionCategories',
+          'Attendance',
+          'Payroll',
+          'Staff',
+          'Inventories',
+          'EggInventories',
+          'Customers',
+          'Suppliers',
+          'Flocks'
+        ];
+
+        for (const tbl of cloudTablesToPurge) {
+          try {
+            await supabaseServer.from(tbl).delete().eq('FarmId', assignedFarmId);
+          } catch (delErr: any) {
+            console.warn(`[Restore] Cloud purge warning for table ${tbl}:`, delErr.message);
+          }
+        }
+
+        console.log(`[Restore] Existing cloud data purged for Farm #${assignedFarmId}. Now pushing new restored snapshot records...`);
+
+        // C. Sync the restored data to Supabase Cloud
         for (const table of backupToRestore.tables) {
+          if (table.name === 'Users') continue; // Do not overwrite cloud user accounts
           if (MULTI_TENANT_TABLES.includes(table.name) && table.rows && table.rows.length > 0) {
             const rowsToPush = table.rows.map((r: any) => ({
               ...r,
@@ -284,7 +392,17 @@ export async function restoreBackupData(backup: any, targetFarmId?: number): Pro
             }
           }
         }
-        console.log(`[Restore] Successfully synced restored data to Supabase Cloud!`);
+
+        // Ensure default EggInventories exist in Supabase Cloud for this farm
+        const { data: cloudEggCheck } = await supabaseServer.from('EggInventories').select('Id').eq('FarmId', assignedFarmId);
+        if (!cloudEggCheck || cloudEggCheck.length === 0) {
+          await supabaseServer.from('EggInventories').insert([
+            { FarmId: assignedFarmId, GradeOrType: 'Fresh Eggs', Quantity: 0, UnitPrice: 5.0, Notes: 'Default Fresh Eggs' },
+            { FarmId: assignedFarmId, GradeOrType: 'Damaged/Waste Eggs', Quantity: 0, UnitPrice: 0.0, Notes: 'Default Waste Eggs' }
+          ]);
+        }
+
+        console.log(`[Restore] Successfully completed cloud overwrite and sync for Farm #${assignedFarmId}!`);
       } catch (cloudErr: any) {
         console.warn('[Restore] Supabase Cloud sync warning:', cloudErr.message);
       }
