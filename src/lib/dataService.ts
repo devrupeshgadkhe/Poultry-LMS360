@@ -66,20 +66,22 @@ export const flockService = {
     const rawFlocks = data || [];
     if (rawFlocks.length === 0) return [];
 
-    // Also fetch daily logs for egg collection statistics
-    let logsMap: Record<number, { eggs: number; damaged: number }> = {};
+    // Also fetch daily logs for egg collection, mortality and bird removal statistics
+    let logsMap: Record<number, { eggs: number; damaged: number; mortalities: number; birdsEaten: number }> = {};
     try {
       const { data: logs } = await supabase
         .from('DailyLogs')
-        .select('FlockId, EggsCollected, DamagedEggsCollected')
+        .select('FlockId, EggsCollected, DamagedEggsCollected, MortalityCount, BirdsEatenBySelf')
         .eq('FarmId', farmId);
       
       if (logs) {
         logs.forEach((log: any) => {
           const fid = log.FlockId;
-          if (!logsMap[fid]) logsMap[fid] = { eggs: 0, damaged: 0 };
+          if (!logsMap[fid]) logsMap[fid] = { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0 };
           logsMap[fid].eggs += Number(log.EggsCollected) || 0;
           logsMap[fid].damaged += Number(log.DamagedEggsCollected) || 0;
+          logsMap[fid].mortalities += Number(log.MortalityCount) || 0;
+          logsMap[fid].birdsEaten += Number(log.BirdsEatenBySelf) || 0;
         });
       }
     } catch (logErr) {
@@ -89,8 +91,24 @@ export const flockService = {
     const today = new Date();
     return rawFlocks.map((flock: any) => {
       const initCount = Number(flock.InitialCount) || 0;
-      const currCount = Number(flock.CurrentCount) || 0;
-      const deadCount = Math.max(0, initCount - currCount);
+      const stats = logsMap[flock.Id] || { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0 };
+      const logMortality = stats.mortalities || 0;
+      const logBirdsEaten = stats.birdsEaten || 0;
+
+      // Dead count: prioritize actual logged mortalities if present, otherwise calculate difference
+      const diffCount = Math.max(0, initCount - (Number(flock.CurrentCount) || 0));
+      const deadCount = Math.max(logMortality, diffCount);
+
+      // Current bird inventory: if flock.CurrentCount in DB was not decremented and equals initial count while mortalities exist,
+      // or if CurrentCount exceeds the live count, accurately compute effective live count
+      let currCount = Number(flock.CurrentCount) || 0;
+      const computedLive = Math.max(0, initCount - deadCount - logBirdsEaten);
+      if (currCount === initCount && (deadCount > 0 || logBirdsEaten > 0)) {
+        currCount = computedLive;
+      } else if (deadCount > 0 && currCount > computedLive) {
+        currCount = computedLive;
+      }
+
       const mortalityRate = initCount > 0 ? (deadCount / initCount) * 100 : 0;
 
       const arrDate = flock.ArrivalDate ? new Date(flock.ArrivalDate) : today;
@@ -100,7 +118,6 @@ export const flockService = {
       const totalPurchase = Number(flock.TotalPurchasePrice) || 0;
       const perBird = Number(flock.PerBirdPurchasePrice) || (initCount > 0 ? totalPurchase / initCount : 0);
 
-      const stats = logsMap[flock.Id] || { eggs: 0, damaged: 0 };
       const totalEggs = stats.eggs + stats.damaged;
       const hdp = (initCount * ageInDays) > 0 ? (totalEggs / (initCount * ageInDays)) * 100 : 0;
 

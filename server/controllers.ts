@@ -79,6 +79,189 @@ export async function logAudit(
   }
 }
 
+/**
+ * Ensures that EggInventories has STRICTLY ONE single row per GradeOrType
+ * ('Fresh Eggs' and 'Damaged/Waste Eggs') for each farm, eliminating all duplicate rows.
+ */
+export async function cleanDuplicateEggInventories(targetFarmId?: number): Promise<void> {
+  try {
+    // First, fix any rows where FarmId is NULL
+    await query.run('UPDATE EggInventories SET FarmId = 1 WHERE FarmId IS NULL');
+
+    const farms = targetFarmId 
+      ? [{ Id: targetFarmId }] 
+      : await query.all<{ Id: number }>('SELECT Id FROM Farms');
+    
+    const grades = ['Fresh Eggs', 'Damaged/Waste Eggs'];
+
+    for (const farm of farms) {
+      const fId = farm.Id;
+      for (const grade of grades) {
+        const rows = await query.all<any>(
+          'SELECT * FROM EggInventories WHERE FarmId = ? AND GradeOrType = ? ORDER BY Id ASC',
+          [fId, grade]
+        );
+
+        if (rows.length === 0) {
+          const unitPrice = grade === 'Fresh Eggs' ? 0.15 : 0.0;
+          const sellingPrice = grade === 'Fresh Eggs' ? 0.25 : 0.05;
+          await query.run(
+            'INSERT INTO EggInventories (FarmId, GradeOrType, PackSize, Quantity, UnitPrice, SellingPrice) VALUES (?, ?, ?, ?, ?, ?)',
+            [fId, grade, 'Single', 0, unitPrice, sellingPrice]
+          );
+        } else if (rows.length > 1) {
+          // Keep rows[0], remove all duplicates
+          const duplicates = rows.slice(1);
+          for (const dup of duplicates) {
+            await query.run('DELETE FROM EggInventories WHERE Id = ?', [dup.Id]);
+            if (supabaseServer) {
+              await supabaseServer.from('EggInventories').delete().eq('Id', dup.Id).catch(() => {});
+            }
+          }
+        }
+      }
+    }
+
+    // Also deduplicate in Supabase Cloud
+    if (supabaseServer) {
+      try {
+        let q = supabaseServer.from('EggInventories').select('*');
+        if (targetFarmId) q = q.eq('FarmId', targetFarmId);
+        const { data: sbEggs } = await q;
+        if (sbEggs && sbEggs.length > 0) {
+          const sbMap = new Map<string, any[]>();
+          for (const row of sbEggs) {
+            const fId = row.FarmId || 1;
+            const grade = (row.GradeOrType || 'Fresh Eggs').trim();
+            const key = `${fId}___${grade}`;
+            if (!sbMap.has(key)) sbMap.set(key, []);
+            sbMap.get(key)!.push(row);
+          }
+          for (const [, rows] of sbMap.entries()) {
+            if (rows.length > 1) {
+              const duplicates = rows.slice(1);
+              for (const dup of duplicates) {
+                await supabaseServer.from('EggInventories').delete().eq('Id', dup.Id);
+              }
+            }
+          }
+        }
+      } catch (sbCleanErr: any) {
+        console.warn('[cleanDuplicateEggInventories Supabase] Notice:', sbCleanErr.message);
+      }
+    }
+  } catch (err: any) {
+    console.warn('[cleanDuplicateEggInventories] Notice:', err.message);
+  }
+}
+
+/**
+ * Reconciles Egg Inventories for a specific farm:
+ * - Checks if any flocks exist for this farm. If 0 flocks remain, all egg stocks are reset to 0!
+ * - If flocks exist, mathematically sums collected eggs from all active DailyLogs on this farm,
+ *   deducts gifted eggs, deducts sales, adds returns, and updates the SINGLE row in EggInventories.
+ * - Deduplicates any redundant rows in both SQLite and Supabase.
+ */
+export async function reconcileEggInventoryForFarm(farmId: number): Promise<void> {
+  try {
+    const fId = Number(farmId) || 1;
+    await cleanDuplicateEggInventories(fId);
+
+    // 1. Check if any flocks exist on this farm
+    const flockCountRow = await query.get<{ count: number }>("SELECT COUNT(*) as count FROM Flocks WHERE FarmId = ?", [fId]);
+    const flockCount = flockCountRow ? flockCountRow.count : 0;
+
+    if (flockCount === 0) {
+      // If ALL flocks are deleted for this farm, ALL eggs MUST BE RESET TO 0!
+      await query.run("UPDATE EggInventories SET Quantity = 0 WHERE FarmId = ?", [fId]);
+      if (supabaseServer) {
+        try {
+          await supabaseServer.from('EggInventories').update({ Quantity: 0 }).eq('FarmId', fId);
+        } catch {}
+      }
+      return;
+    }
+
+    // 2. Compute exact fresh eggs: (EggsCollected from existing flocks) - (EggsGifted) - (Fresh eggs sold) + (Fresh eggs returned)
+    const freshLogs = await query.get<{ collected: number, gifted: number }>(`
+      SELECT 
+        IFNULL(SUM(d.EggsCollected), 0) as collected,
+        IFNULL(SUM(d.EggsGifted), 0) as gifted
+      FROM DailyLogs d
+      JOIN Flocks f ON d.FlockId = f.Id
+      WHERE (d.FarmId = ? OR f.FarmId = ?)
+    `, [fId, fId]);
+
+    const freshSales = await query.get<{ sold: number }>(`
+      SELECT IFNULL(SUM(si.Quantity), 0) as sold
+      FROM SaleItems si
+      JOIN Sales s ON si.SaleId = s.Id
+      LEFT JOIN EggInventories e ON si.EggInventoryId = e.Id
+      WHERE (s.FarmId = ? OR s.FarmId IS NULL)
+        AND si.ItemType = 'Egg'
+        AND (e.GradeOrType = 'Fresh Eggs' OR e.GradeOrType IS NULL)
+    `, [fId]);
+
+    const freshReturns = await query.get<{ returned: number }>(`
+      SELECT IFNULL(SUM(sri.Quantity), 0) as returned
+      FROM SaleReturnItems sri
+      JOIN SaleReturns sr ON sri.SaleReturnId = sr.Id
+      LEFT JOIN EggInventories e ON sri.EggInventoryId = e.Id
+      WHERE (sr.FarmId = ? OR sr.FarmId IS NULL)
+        AND sri.ItemType = 'Egg'
+        AND (e.GradeOrType = 'Fresh Eggs' OR e.GradeOrType IS NULL)
+    `, [fId]);
+
+    const netFresh = Math.max(0, (freshLogs?.collected || 0) - (freshLogs?.gifted || 0) - (freshSales?.sold || 0) + (freshReturns?.returned || 0));
+
+    // Damaged eggs
+    const damagedLogs = await query.get<{ collected: number }>(`
+      SELECT IFNULL(SUM(d.DamagedEggsCollected), 0) as collected
+      FROM DailyLogs d
+      JOIN Flocks f ON d.FlockId = f.Id
+      WHERE (d.FarmId = ? OR f.FarmId = ?)
+    `, [fId, fId]);
+
+    const damagedSales = await query.get<{ sold: number }>(`
+      SELECT IFNULL(SUM(si.Quantity), 0) as sold
+      FROM SaleItems si
+      JOIN Sales s ON si.SaleId = s.Id
+      LEFT JOIN EggInventories e ON si.EggInventoryId = e.Id
+      WHERE (s.FarmId = ? OR s.FarmId IS NULL)
+        AND si.ItemType = 'Egg'
+        AND e.GradeOrType = 'Damaged/Waste Eggs'
+    `, [fId]);
+
+    const damagedReturns = await query.get<{ returned: number }>(`
+      SELECT IFNULL(SUM(sri.Quantity), 0) as returned
+      FROM SaleReturnItems sri
+      JOIN SaleReturns sr ON sri.SaleReturnId = sr.Id
+      LEFT JOIN EggInventories e ON sri.EggInventoryId = e.Id
+      WHERE (sr.FarmId = ? OR sr.FarmId IS NULL)
+        AND sri.ItemType = 'Egg'
+        AND e.GradeOrType = 'Damaged/Waste Eggs'
+    `, [fId]);
+
+    const netDamaged = Math.max(0, (damagedLogs?.collected || 0) - (damagedSales?.sold || 0) + (damagedReturns?.returned || 0));
+
+    // Update single rows in SQLite
+    await query.run("UPDATE EggInventories SET Quantity = ? WHERE GradeOrType = 'Fresh Eggs' AND FarmId = ?", [netFresh, fId]);
+    await query.run("UPDATE EggInventories SET Quantity = ? WHERE GradeOrType = 'Damaged/Waste Eggs' AND FarmId = ?", [netDamaged, fId]);
+
+    // Update single rows in Supabase Cloud
+    if (supabaseServer) {
+      try {
+        await supabaseServer.from('EggInventories').update({ Quantity: netFresh }).eq('GradeOrType', 'Fresh Eggs').eq('FarmId', fId);
+        await supabaseServer.from('EggInventories').update({ Quantity: netDamaged }).eq('GradeOrType', 'Damaged/Waste Eggs').eq('FarmId', fId);
+      } catch (sbErr: any) {
+        console.warn('[reconcileEggInventoryForFarm] Supabase notice:', sbErr.message);
+      }
+    }
+  } catch (err: any) {
+    console.error('[reconcileEggInventoryForFarm] Error:', err);
+  }
+}
+
 // User & Auth Controllers
 export const authControllers = {
   async login(req: Request, res: Response) {
@@ -244,11 +427,22 @@ export const inventoryControllers = {
 export const flockControllers = {
   async list(req: Request, res: Response) {
     try {
+      const farmId = Number(req.query.farmId || req.headers['x-farm-id']);
+      let whereClause = '';
+      const params: any[] = [];
+      if (farmId) {
+        whereClause = 'WHERE f.FarmId = ? OR f.FarmId IS NULL';
+        params.push(farmId);
+      }
+
       const flocks = await query.all(`
         SELECT f.*,
-               (SELECT IFNULL(SUM(MortalityCount), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccumulatedMortaliety,
+               (SELECT IFNULL(SUM(MortalityCount), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccumulatedMortality,
+               (SELECT IFNULL(SUM(BirdsEatenBySelf), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccumulatedBirdsEaten,
                (SELECT IFNULL(SUM(EggsCollected), 0) FROM DailyLogs WHERE FlockId = f.Id) as FreshCollected,
                (SELECT IFNULL(SUM(DamagedEggsCollected), 0) FROM DailyLogs WHERE FlockId = f.Id) as DamagedCollected,
+               (SELECT COUNT(DISTINCT LogDate) FROM DailyLogs WHERE FlockId = f.Id AND (EggsCollected > 0 OR DamagedEggsCollected > 0)) as LayingDaysCount,
+               (SELECT IFNULL(SUM(FeedCost), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccruedFeedCost,
                (SELECT IFNULL(SUM(Cost), 0) FROM Vaccinations WHERE FlockId = f.Id) as UpdatedVaccineCost,
                (SELECT IFNULL(SUM(Amount), 0) FROM FinancialTransactions 
                 WHERE FlockId = f.Id 
@@ -260,37 +454,54 @@ export const flockControllers = {
                 WHERE FlockId = f.Id 
                   AND Type = 'Income') as FlockIncomes
         FROM Flocks f
-      `);
+        ${whereClause}
+      `, params);
 
       // Fill dynamically calculated values for ROI / KPIs
       const today = new Date();
       const updatedFlocks = flocks.map((flock: any) => {
         // Calculate age
-        const arrDate = new Date(flock.ArrivalDate);
+        const arrDate = new Date(flock.ArrivalDate || today);
         const endDate = flock.EndDate ? new Date(flock.EndDate) : today;
         const diffTime = Math.abs(endDate.getTime() - arrDate.getTime());
         const ageInDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
         
-        // Feed KPI calculations
-        const accMort = flock.AccumulatedMortaliety || 0;
+        // Feed & egg KPI calculations
+        const accMort = flock.AccumulatedMortality || 0;
+        const accBirdsEaten = flock.AccumulatedBirdsEaten || 0;
         const freshCl = flock.FreshCollected || 0;
         const dmgCl = flock.DamagedCollected || 0;
         const totalEggs = freshCl + dmgCl;
 
-        const currentActiveBirds = flock.CurrentCount;
-        const mortalityRate = flock.InitialCount > 0 ? (accMort / flock.InitialCount) * 100 : 0;
+        const totalLost = accMort + accBirdsEaten;
+        const calculatedActive = Math.max(0, flock.InitialCount - totalLost);
+        // If DB CurrentCount was not decremented, use mathematically accurate live count
+        const currentActiveBirds = (flock.CurrentCount === flock.InitialCount && totalLost > 0)
+          ? calculatedActive
+          : Math.min(flock.CurrentCount, calculatedActive);
+
+        const deadCount = Math.max(accMort, flock.InitialCount - currentActiveBirds);
+        const mortalityRate = flock.InitialCount > 0 ? (deadCount / flock.InitialCount) * 100 : 0;
         
-        // Hen Day Production (HDP %)
-        const hdp = (totalEggs / (flock.InitialCount * ageInDays)) * 100;
+        // Hen Day Production (HDP %) based on active laying cycle of recorded days
+        const layingDays = Math.max(1, flock.LayingDaysCount || 0);
+        const avgLiveBirds = Math.max(1, (flock.InitialCount + currentActiveBirds) / 2);
+        const totalHenDays = avgLiveBirds * layingDays;
+        const hdp = (flock.LayingDaysCount > 0 && totalHenDays > 0 && totalEggs > 0)
+          ? Math.min(100, (totalEggs / totalHenDays) * 100)
+          : 0;
 
         const totalFlockEggs = freshCl + dmgCl;
-        const totalFlockExpenses = (flock.TotalPurchasePrice || 0) + (flock.TotalFeedCost || 0) + (flock.UpdatedVaccineCost || 0) + (flock.ManualExpenses || 0);
+        const totalFeedCost = Math.max(flock.AccruedFeedCost || 0, flock.TotalFeedCost || 0);
+        const totalFlockExpenses = (flock.TotalPurchasePrice || 0) + totalFeedCost + (flock.UpdatedVaccineCost || 0) + (flock.ManualExpenses || 0);
         const flockIncomes = flock.FlockIncomes || 0;
         const netFlockCost = Math.max(0, totalFlockExpenses - flockIncomes);
         const perEggCost = totalFlockEggs > 0 ? netFlockCost / totalFlockEggs : 0;
 
         return {
           ...flock,
+          CurrentCount: currentActiveBirds,
+          TotalFeedCost: totalFeedCost,
           AgeInDays: ageInDays,
           MortalityRate: mortalityRate,
           HDP: hdp,
@@ -392,13 +603,34 @@ export const flockControllers = {
   async delete(req: Request, res: Response) {
     const { id } = req.params;
     try {
+      const flock = await query.get<any>('SELECT * FROM Flocks WHERE Id = ?', [id]);
+      const farmId = flock ? (flock.FarmId || 1) : 1;
+
       await query.serializeTransaction(async () => {
+        // Child records delete in SQLite
+        await query.run('DELETE FROM DailyLogs WHERE FlockId = ?', [id]);
+        await query.run('DELETE FROM Vaccinations WHERE FlockId = ?', [id]);
         await query.run('DELETE FROM Flocks WHERE Id = ?', [id]);
         // Clean slate for existing transaction linked to this flock purchase
         await query.run("DELETE FROM FinancialTransactions WHERE Notes LIKE ?", [`[Flock #${id}]%`]);
       });
+
+      // Synchronize deletion to Supabase Cloud
+      if (supabaseServer) {
+        try {
+          await supabaseServer.from('DailyLogs').delete().eq('FlockId', id);
+          await supabaseServer.from('Vaccinations').delete().eq('FlockId', id);
+          await supabaseServer.from('Flocks').delete().eq('Id', id);
+        } catch (sbDelErr: any) {
+          console.warn('[Flock Delete Supabase] Warning:', sbDelErr.message);
+        }
+      }
+
+      // Reconcile and deduct eggs for this farm from EggInventories (or set to 0 if all flocks deleted!)
+      await reconcileEggInventoryForFarm(farmId);
+
       await logAudit(req, '', 'Flocks', 'Delete', { id }, 'SUCCESS');
-      res.json({ message: 'Flock deleted successfully' });
+      res.json({ message: 'Flock and linked logs deleted, egg inventories updated successfully' });
     } catch (e: any) {
       await logAudit(req, '', 'Flocks', 'Delete', { id }, 'FAILED', e.message);
       res.status(500).json({ error: e.message });
@@ -425,6 +657,9 @@ export const dailyLogsControllers = {
       logsQuery += ` ORDER BY d.LogDate ASC`;
 
       const logs = await query.all(logsQuery, queryParams);
+
+      // Sort forward in time first so running bird counts & HDP are mathematically accurate
+      logs.sort((a: any, b: any) => new Date((a.LogDate || '').split('T')[0]).getTime() - new Date((b.LogDate || '').split('T')[0]).getTime());
 
       const birdSales = await query.all(`
         SELECT s.SaleDate, si.FlockId, SUM(si.Quantity) as SoldCount
@@ -483,7 +718,14 @@ export const dailyLogsControllers = {
         };
       });
 
-      enrichedLogs.reverse();
+      // Strictly sort descending date-wise (latest date first)
+      enrichedLogs.sort((a: any, b: any) => {
+        const dateA = new Date((a.LogDate || '').split('T')[0]).getTime() || 0;
+        const dateB = new Date((b.LogDate || '').split('T')[0]).getTime() || 0;
+        if (dateB !== dateA) return dateB - dateA;
+        return (Number(b.Id) || 0) - (Number(a.Id) || 0);
+      });
+
       res.json(enrichedLogs);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -623,6 +865,9 @@ export const dailyLogsControllers = {
           `, [targetFarmId, LogDate, EggsGifted * EggsGiftedValue, catId, `[DailyLog #${logId}] Eggs gifted: ${EggsGifted} eggs`, FlockId]);
         }
       });
+
+      // Strictly reconcile and synchronize single-row EggInventories for this farm
+      await reconcileEggInventoryForFarm(targetFarmId);
 
       // Synchronize newly created log to Supabase Cloud
       syncRecordToSupabase('DailyLogs', {
@@ -822,6 +1067,9 @@ export const dailyLogsControllers = {
         }
       });
 
+      // Strictly reconcile and synchronize single-row EggInventories for this farm
+      await reconcileEggInventoryForFarm(targetFarmId);
+
       // Synchronize updated log to Supabase Cloud
       syncRecordToSupabase('DailyLogs', {
         Id: Number(id),
@@ -899,6 +1147,9 @@ export const dailyLogsControllers = {
         await query.run('DELETE FROM DailyLogs WHERE Id = ?', [id]);
         await query.run("DELETE FROM FinancialTransactions WHERE Notes LIKE ?", [`[DailyLog #${id}]%`]);
       });
+
+      // Strictly reconcile and synchronize single-row EggInventories for this farm
+      await reconcileEggInventoryForFarm(farmIdToDelete);
 
       // Synchronize deletion to Supabase Cloud
       deleteRecordFromSupabase('DailyLogs', Number(id), farmIdToDelete)
@@ -3408,6 +3659,184 @@ export const sysDashboardControllers = {
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  }
+};
+
+// Developer Tools Controllers: Hard Reset for Particular Farm or All Farms
+export const developerControllers = {
+  async hardReset(req: Request, res: Response) {
+    const { scope, farmId } = req.body;
+    const targetFarmId = Number(farmId) || 1;
+    try {
+      if (scope !== 'particular' && scope !== 'all') {
+        return res.status(400).json({ error: "Invalid scope. Must be 'particular' or 'all'." });
+      }
+
+      if (scope === 'particular') {
+        // Hard reset for a particular farm
+        await query.serializeTransaction(async () => {
+          // 1. Get all flock IDs for this farm
+          const farmFlocks = await query.all<{ Id: number }>('SELECT Id FROM Flocks WHERE FarmId = ?', [targetFarmId]);
+          const flockIds = farmFlocks.map(f => f.Id);
+          const flockPlaceholders = flockIds.length > 0 ? flockIds.map(() => '?').join(',') : null;
+
+          // Delete DailyLogs & Vaccinations
+          if (flockPlaceholders) {
+            await query.run(`DELETE FROM DailyLogs WHERE FarmId = ? OR FlockId IN (${flockPlaceholders})`, [targetFarmId, ...flockIds]);
+            await query.run(`DELETE FROM Vaccinations WHERE FarmId = ? OR FlockId IN (${flockPlaceholders})`, [targetFarmId, ...flockIds]);
+          } else {
+            await query.run('DELETE FROM DailyLogs WHERE FarmId = ?', [targetFarmId]);
+            await query.run('DELETE FROM Vaccinations WHERE FarmId = ?', [targetFarmId]);
+          }
+
+          // Delete Flocks
+          await query.run('DELETE FROM Flocks WHERE FarmId = ?', [targetFarmId]);
+
+          // Delete Sales & Returns
+          await query.run(`
+            DELETE FROM SaleReturnItems WHERE SaleReturnId IN (SELECT Id FROM SaleReturns WHERE FarmId = ?)
+          `, [targetFarmId]);
+          await query.run('DELETE FROM SaleReturns WHERE FarmId = ?', [targetFarmId]);
+
+          await query.run(`
+            DELETE FROM SaleItems WHERE SaleId IN (SELECT Id FROM Sales WHERE FarmId = ?)
+          `, [targetFarmId]);
+          await query.run('DELETE FROM Sales WHERE FarmId = ?', [targetFarmId]);
+
+          // Delete Purchases & Returns
+          await query.run(`
+            DELETE FROM PurchaseReturnItems WHERE PurchaseReturnId IN (SELECT Id FROM PurchaseReturns WHERE FarmId = ?)
+          `, [targetFarmId]);
+          await query.run('DELETE FROM PurchaseReturns WHERE FarmId = ?', [targetFarmId]);
+
+          await query.run(`
+            DELETE FROM PurchaseExtraExpenses WHERE PurchaseId IN (SELECT Id FROM Purchases WHERE FarmId = ?)
+          `, [targetFarmId]);
+          await query.run(`
+            DELETE FROM PurchaseItems WHERE PurchaseId IN (SELECT Id FROM Purchases WHERE FarmId = ?)
+          `, [targetFarmId]);
+          await query.run('DELETE FROM Purchases WHERE FarmId = ?', [targetFarmId]);
+
+          // Delete Financial Transactions & Feed Production Logs
+          await query.run('DELETE FROM FinancialTransactions WHERE FarmId = ?', [targetFarmId]);
+          await query.run('DELETE FROM FeedProductionLogs WHERE FarmId = ?', [targetFarmId]);
+
+          // Delete Recipes
+          await query.run(`
+            DELETE FROM RecipeIngredients WHERE RecipeId IN (SELECT Id FROM FoodRecipes WHERE FarmId = ?)
+          `, [targetFarmId]);
+          await query.run('DELETE FROM FoodRecipes WHERE FarmId = ?', [targetFarmId]);
+
+          // Delete Staff
+          await query.run(`
+            DELETE FROM StaffPayrolls WHERE StaffId IN (SELECT Id FROM Staff WHERE FarmId = ?)
+          `, [targetFarmId]);
+          await query.run(`
+            DELETE FROM StaffAttendances WHERE StaffId IN (SELECT Id FROM Staff WHERE FarmId = ?)
+          `, [targetFarmId]);
+          await query.run('DELETE FROM Staff WHERE FarmId = ?', [targetFarmId]);
+
+          // Delete Customers & Suppliers
+          await query.run('DELETE FROM Customers WHERE FarmId = ?', [targetFarmId]);
+          await query.run('DELETE FROM Suppliers WHERE FarmId = ?', [targetFarmId]);
+
+          // Delete Audit Logs
+          await query.run('DELETE FROM AuditLogs WHERE FarmId = ?', [targetFarmId]);
+
+          // Reset Egg Inventories for this farm to 0
+          await query.run('UPDATE EggInventories SET Quantity = 0 WHERE FarmId = ?', [targetFarmId]);
+
+          // Reset Inventories stock for this farm to 0
+          await query.run('UPDATE Inventories SET CurrentStock = 0 WHERE FarmId = ?', [targetFarmId]);
+        });
+
+        // Also execute reset on Supabase Cloud for this farm
+        if (supabaseServer) {
+          try {
+            await supabaseServer.from('DailyLogs').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('Vaccinations').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('Flocks').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('Sales').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('Purchases').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('FinancialTransactions').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('Staff').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('Customers').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('Suppliers').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('FoodRecipes').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('FeedProductionLogs').delete().eq('FarmId', targetFarmId);
+            await supabaseServer.from('EggInventories').update({ Quantity: 0 }).eq('FarmId', targetFarmId);
+            await supabaseServer.from('Inventories').update({ CurrentStock: 0 }).eq('FarmId', targetFarmId);
+          } catch (sbErr: any) {
+            console.warn('[Hard Reset Supabase] Warning:', sbErr.message);
+          }
+        }
+
+        await cleanDuplicateEggInventories(targetFarmId);
+        await reconcileEggInventoryForFarm(targetFarmId);
+
+        await logAudit(req, '', 'Developer', 'Hard Reset Particular Farm', { farmId: targetFarmId }, 'SUCCESS', '', targetFarmId);
+        return res.json({ success: true, message: `Farm #${targetFarmId} form data has been completely reset.`, scope: 'particular', farmId: targetFarmId });
+      }
+
+      if (scope === 'all') {
+        // Complete system reset across ALL farms
+        await query.serializeTransaction(async () => {
+          const tablesToPurge = [
+            'DailyLogs', 'Vaccinations', 'SaleReturnItems', 'SaleReturns', 'SaleItems', 'Sales',
+            'PurchaseReturnItems', 'PurchaseReturns', 'PurchaseExtraExpenses', 'PurchaseItems', 'Purchases',
+            'RecipeIngredients', 'FoodRecipes', 'StaffPayrolls', 'StaffAttendances', 'Holidays',
+            'FinancialTransactions', 'FeedProductionLogs', 'Flocks', 'Customers', 'Suppliers', 'Staff',
+            'AuditLogs', 'JavascriptErrors'
+          ];
+
+          for (const tbl of tablesToPurge) {
+            try {
+              await query.run(`DELETE FROM \`${tbl}\``);
+            } catch {}
+          }
+
+          // Reset SQLite auto-increment counters to 1
+          try {
+            await query.run(`DELETE FROM sqlite_sequence WHERE name IN (${tablesToPurge.map(() => '?').join(',')})`, tablesToPurge);
+          } catch {}
+
+          // Reset EggInventories to 0
+          await query.run('UPDATE EggInventories SET Quantity = 0');
+
+          // Reset Inventories stock to 0
+          await query.run('UPDATE Inventories SET CurrentStock = 0');
+        });
+
+        // Supabase Cloud Reset
+        if (supabaseServer) {
+          try {
+            const sbTables = [
+              'DailyLogs', 'Vaccinations', 'SaleReturnItems', 'SaleReturns', 'SaleItems', 'Sales',
+              'PurchaseReturnItems', 'PurchaseReturns', 'PurchaseExtraExpenses', 'PurchaseItems', 'Purchases',
+              'RecipeIngredients', 'FoodRecipes', 'StaffPayrolls', 'StaffAttendances', 'Holidays',
+              'FinancialTransactions', 'FeedProductionLogs', 'Flocks', 'Customers', 'Suppliers', 'Staff',
+              'AuditLogs', 'JavascriptErrors'
+            ];
+            for (const tbl of sbTables) {
+              await supabaseServer.from(tbl).delete().neq('Id', -1).catch(() => {});
+            }
+            await supabaseServer.from('EggInventories').update({ Quantity: 0 }).neq('Id', -1).catch(() => {});
+            await supabaseServer.from('Inventories').update({ CurrentStock: 0 }).neq('Id', -1).catch(() => {});
+          } catch (sbErr: any) {
+            console.warn('[Hard Reset All Supabase] Warning:', sbErr.message);
+          }
+        }
+
+        // Clean duplicates
+        await cleanDuplicateEggInventories();
+
+        await logAudit(req, '', 'Developer', 'Hard Reset All Farms', {}, 'SUCCESS');
+        return res.json({ success: true, message: 'All farms data has been completely reset to fresh start. Identities restarted.', scope: 'all' });
+      }
+    } catch (err: any) {
+      await logAudit(req, '', 'Developer', 'Hard Reset', { scope, farmId }, 'FAILED', err.message);
+      return res.status(500).json({ error: err.message });
     }
   }
 };

@@ -1,16 +1,31 @@
 import { Request, Response } from 'express';
 import { query } from './db.js';
-import { logAudit } from './controllers.js';
-import { syncRecordToSupabase } from './supabase.js';
+import { logAudit, cleanDuplicateEggInventories, reconcileEggInventoryForFarm } from './controllers.js';
+import { syncRecordToSupabase, reconcileAllFlocksInventory } from './supabase.js';
 
-// Custom lightweight CSV parser
+// Detect delimiter based on first row
+export function detectDelimiter(text: string): string {
+  const firstLine = text.split(/\r\n|\r|\n/)[0] || '';
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const semicolonCount = (firstLine.match(/;/g) || []).length;
+  const tabCount = (firstLine.match(/\t/g) || []).length;
+  if (semicolonCount > commaCount && semicolonCount > tabCount) return ';';
+  if (tabCount > commaCount && tabCount > semicolonCount) return '\t';
+  return ',';
+}
+
+// Custom lightweight CSV parser with auto-delimiter and BOM stripping
 export function parseCSV(text: string): string[][] {
+  if (!text) return [];
+  // Strip UTF-8 BOM (\uFEFF) and zero-width characters
+  const cleanText = text.replace(/^\uFEFF/, '').replace(/^[\u200B\u200C\u200D\uFEFF]/, '');
+  const delimiter = detectDelimiter(cleanText);
   const lines: string[][] = [];
   let row: string[] = [""];
   let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    const nextChar = text[i + 1];
+  for (let i = 0; i < cleanText.length; i++) {
+    const char = cleanText[i];
+    const nextChar = cleanText[i + 1];
     if (char === '"') {
       if (inQuotes && nextChar === '"') {
         row[row.length - 1] += '"';
@@ -18,7 +33,7 @@ export function parseCSV(text: string): string[][] {
       } else {
         inQuotes = !inQuotes;
       }
-    } else if (char === ',' && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       row.push("");
     } else if ((char === '\r' || char === '\n') && !inQuotes) {
       if (char === '\r' && nextChar === '\n') {
@@ -34,6 +49,198 @@ export function parseCSV(text: string): string[][] {
     lines.push(row);
   }
   return lines;
+}
+
+// Clean numbers handling commas, currencies, decimals, etc.
+export function cleanInt(val: any, defaultVal = 0): number {
+  if (val === undefined || val === null) return defaultVal;
+  const str = String(val).replace(/,/g, '').replace(/[^0-9\-.]/g, '').trim();
+  if (!str) return defaultVal;
+  const num = Math.round(parseFloat(str));
+  return isNaN(num) ? defaultVal : num;
+}
+
+export function cleanFloat(val: any, defaultVal = 0): number {
+  if (val === undefined || val === null) return defaultVal;
+  const str = String(val).replace(/,/g, '').replace(/[^0-9\-.]/g, '').trim();
+  if (!str) return defaultVal;
+  const num = parseFloat(str);
+  return isNaN(num) ? defaultVal : num;
+}
+
+export function cleanDate(rawDate: string): string {
+  if (!rawDate) return '';
+  const trimmed = String(rawDate).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmy = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (dmy) {
+    return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+  }
+  // YYYY/MM/DD
+  const ymd = trimmed.match(/^(\d{4})[\/](\d{1,2})[\/](\d{1,2})$/);
+  if (ymd) {
+    return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+  }
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().split('T')[0];
+  }
+  return trimmed;
+}
+
+// Comprehensive aliases for column headers matching any Excel or user variations
+export const HEADER_KEY_MAP: Record<string, string> = {
+  // Eggs Collected
+  eggscollected: 'EggsCollected',
+  eggcollected: 'EggsCollected',
+  dailycollected: 'EggsCollected',
+  dailycollecteddata: 'EggsCollected',
+  dailycollectedeggs: 'EggsCollected',
+  collectedeggs: 'EggsCollected',
+  dailyeggs: 'EggsCollected',
+  dailyegg: 'EggsCollected',
+  eggs: 'EggsCollected',
+  collected: 'EggsCollected',
+  eggcollection: 'EggsCollected',
+  dailyeggcollection: 'EggsCollected',
+  totaleggs: 'EggsCollected',
+  eggproduction: 'EggsCollected',
+  eggsproduced: 'EggsCollected',
+  eggcount: 'EggsCollected',
+  fresheggs: 'EggsCollected',
+  laidtoday: 'EggsCollected',
+  eggslaid: 'EggsCollected',
+  production: 'EggsCollected',
+  layerscollection: 'EggsCollected',
+
+  // Mortality
+  mortalitycount: 'MortalityCount',
+  mortality: 'MortalityCount',
+  mortalities: 'MortalityCount',
+  deaths: 'MortalityCount',
+  death: 'MortalityCount',
+  deadbirds: 'MortalityCount',
+  deadcount: 'MortalityCount',
+  losses: 'MortalityCount',
+  died: 'MortalityCount',
+  mortalityqty: 'MortalityCount',
+  birddeaths: 'MortalityCount',
+
+  // Feed Consumed
+  feedconsumedkg: 'FeedConsumedKg',
+  feedconsumed: 'FeedConsumedKg',
+  feedkg: 'FeedConsumedKg',
+  feedconsumedinkg: 'FeedConsumedKg',
+  feedused: 'FeedConsumedKg',
+  feedquantity: 'FeedConsumedKg',
+  feedqty: 'FeedConsumedKg',
+  feedintake: 'FeedConsumedKg',
+  feed: 'FeedConsumedKg',
+  dailyfeed: 'FeedConsumedKg',
+
+  // Damaged Eggs
+  damagedeggscollected: 'DamagedEggsCollected',
+  damagedeggs: 'DamagedEggsCollected',
+  damaged: 'DamagedEggsCollected',
+  wasteeggs: 'DamagedEggsCollected',
+  brokeneggs: 'DamagedEggsCollected',
+  breakage: 'DamagedEggsCollected',
+  crackedeggs: 'DamagedEggsCollected',
+  damage: 'DamagedEggsCollected',
+  waste: 'DamagedEggsCollected',
+
+  // Water Consumed
+  waterconsumed: 'WaterConsumed',
+  water: 'WaterConsumed',
+  waterlitres: 'WaterConsumed',
+  waterl: 'WaterConsumed',
+  waterintake: 'WaterConsumed',
+
+  // Daily Average Weight
+  dailyaverageweight: 'DailyAverageWeight',
+  averageweight: 'DailyAverageWeight',
+  avgweight: 'DailyAverageWeight',
+  birdweight: 'DailyAverageWeight',
+  weight: 'DailyAverageWeight',
+  bodyweight: 'DailyAverageWeight',
+
+  // Birds Eaten
+  birdseatenbyself: 'BirdsEatenBySelf',
+  birdseaten: 'BirdsEatenBySelf',
+  selfconsumed: 'BirdsEatenBySelf',
+  homeconsumption: 'BirdsEatenBySelf',
+  selfconsumption: 'BirdsEatenBySelf',
+  birdeaten: 'BirdsEatenBySelf',
+
+  // Birds Eaten Value
+  birdseatenvalue: 'BirdsEatenValue',
+  birdseatenamount: 'BirdsEatenValue',
+  selfconsumedvalue: 'BirdsEatenValue',
+
+  // Eggs Gifted
+  eggsgifted: 'EggsGifted',
+  giftedeggs: 'EggsGifted',
+  gifted: 'EggsGifted',
+  donatedeggs: 'EggsGifted',
+  gift: 'EggsGifted',
+
+  // Eggs Gifted Value
+  eggsgiftedvalue: 'EggsGiftedValue',
+  giftedvalue: 'EggsGiftedValue',
+
+  // Flock / Batch Name / Flock Identifier
+  flockname: 'FlockName',
+  flock: 'FlockName',
+  flockidentifier: 'FlockName',
+  identifier: 'FlockName',
+  batch: 'FlockName',
+  batchname: 'FlockName',
+  flockgroup: 'FlockName',
+  group: 'FlockName',
+  flockid: 'FlockName',
+  flockno: 'FlockName',
+  flocknumber: 'FlockName',
+  flockcode: 'FlockName',
+  shed: 'FlockName',
+  shedname: 'FlockName',
+  house: 'FlockName',
+  housename: 'FlockName',
+
+  // Date
+  logdate: 'LogDate',
+  date: 'LogDate',
+  day: 'LogDate',
+  recorddate: 'LogDate',
+  entrydate: 'LogDate',
+
+  // Feed Name
+  feedname: 'FeedName',
+  feeditem: 'FeedName',
+  feeditemname: 'FeedName',
+  feedtype: 'FeedName',
+  feedbrand: 'FeedName',
+
+  // General Notes
+  notes: 'Notes',
+  remarks: 'Notes',
+  comments: 'Notes',
+  description: 'Notes'
+};
+
+export function normalizeRecordKeys(rawRecord: any): any {
+  if (!rawRecord) return {};
+  const normalized: any = { ...rawRecord };
+  for (const [key, val] of Object.entries(rawRecord)) {
+    const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const canonicalKey = HEADER_KEY_MAP[cleanKey];
+    if (canonicalKey) {
+      if (normalized[canonicalKey] === undefined || normalized[canonicalKey] === '') {
+        normalized[canonicalKey] = typeof val === 'string' ? val.trim() : val;
+      }
+    }
+  }
+  return normalized;
 }
 
 export const bulkImportControllers = {
@@ -101,16 +308,22 @@ export const bulkImportControllers = {
       const existingDailyLogs = await query.all<{ FlockId: number, LogDate: string }>('SELECT FlockId, LogDate FROM DailyLogs WHERE FarmId = ? OR FarmId IS NULL', [targetFarmId]);
       const dailyLogSet = new Set(existingDailyLogs.map(log => `${log.FlockId}_${(log.LogDate || '').split('T')[0]}`));
 
+      let hasNonZeroEggs = false;
+      let hasNonZeroMortality = false;
+
       for (let index = 0; index < dataRows.length; index++) {
         const rawRow = dataRows[index];
-        const record: any = {};
+        const rawRecord: any = {};
         
         // Map list values to keys based on header row
         headers.forEach((header, colIndex) => {
           if (header) {
-            record[header] = rawRow[colIndex] ? rawRow[colIndex].trim() : '';
+            rawRecord[header] = rawRow[colIndex] ? rawRow[colIndex].trim() : '';
           }
         });
+
+        // Apply comprehensive alias mapping for columns like "Daily Collected", "Eggs Collected", etc.
+        const record = normalizeRecordKeys(rawRecord);
 
         let status: 'Valid' | 'Duplicate' | 'Invalid' = 'Valid';
         const errors: string[] = [];
@@ -151,8 +364,34 @@ export const bulkImportControllers = {
         } else if (type === 'daily-logs') {
           // Fields: FlockName, LogDate, FeedName, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, WaterConsumed, DailyAverageWeight, BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, Notes
           const flockName = record.FlockName || '';
-          const logDate = record.LogDate || '';
+          let logDate = cleanDate(record.LogDate || '');
+          record.LogDate = logDate;
           const feedName = record.FeedName || '';
+
+          const eggs = cleanInt(record.EggsCollected || 0);
+          const mortality = cleanInt(record.MortalityCount || 0);
+          const feed = cleanFloat(record.FeedConsumedKg || 0);
+          const damaged = cleanInt(record.DamagedEggsCollected || 0);
+          const water = cleanFloat(record.WaterConsumed || 0);
+          const weight = cleanFloat(record.DailyAverageWeight || 0);
+          const birdsEaten = cleanInt(record.BirdsEatenBySelf || 0);
+          const birdsEatenVal = cleanFloat(record.BirdsEatenValue || 0);
+          const eggsGifted = cleanInt(record.EggsGifted || 0);
+          const eggsGiftedVal = cleanFloat(record.EggsGiftedValue || 0);
+
+          record.EggsCollected = String(eggs);
+          record.MortalityCount = String(mortality);
+          record.FeedConsumedKg = String(feed);
+          record.DamagedEggsCollected = String(damaged);
+          record.WaterConsumed = String(water);
+          record.DailyAverageWeight = String(weight);
+          record.BirdsEatenBySelf = String(birdsEaten);
+          record.BirdsEatenValue = String(birdsEatenVal);
+          record.EggsGifted = String(eggsGifted);
+          record.EggsGiftedValue = String(eggsGiftedVal);
+
+          if (eggs > 0) hasNonZeroEggs = true;
+          if (mortality > 0) hasNonZeroMortality = true;
 
           if (!flockName) {
             errors.push('Missing FlockName');
@@ -162,7 +401,7 @@ export const bulkImportControllers = {
             errors.push('Missing LogDate (YYYY-MM-DD)');
             status = 'Invalid';
           } else if (!/^\d{4}-\d{2}-\d{2}$/.test(logDate)) {
-            errors.push('Invalid Date format. Must be YYYY-MM-DD');
+            errors.push('Invalid Date format. Must be YYYY-MM-DD or DD/MM/YYYY');
             status = 'Invalid';
           }
 
@@ -190,14 +429,16 @@ export const bulkImportControllers = {
             const matchedFeed = inventories.find(inv => inv.ItemName.toLowerCase().trim() === feedName.toLowerCase().trim());
             if (matchedFeed) {
               record._feedItemId = matchedFeed.Id;
-              details.push(`Matched Feed Item: "${feedName}" (ID: ${matchedFeed.Id})`);
+              details.push(`Feed: "${feedName}" (ID: ${matchedFeed.Id})`);
             } else {
               record._feedItemId = null;
-              details.push(`Feed item "${feedName}" is not registered. A default feed item "Default Feed" will be matched or auto-created.`);
+              details.push(`Feed item "${feedName}" will use default feed item`);
             }
           } else {
             record._feedItemId = null;
           }
+
+          details.push(`🥚 Eggs Collected: ${eggs.toLocaleString()} | 💀 Mortality: ${mortality} | 🌾 Feed: ${feed} kg`);
 
         } else if (type === 'purchases') {
           // Fields: InvoiceNumber, SupplierName, PurchaseDate, ItemName, ItemType, Quantity, UnitPrice, GSTPercentage, ReceivedAmount, Status, Notes
@@ -358,6 +599,10 @@ export const bulkImportControllers = {
         });
       }
 
+      if (type === 'daily-logs' && !hasNonZeroEggs && hasNonZeroMortality) {
+        (validationSummary as any).advisory = "Advisory: 'Eggs Collected' is parsed as 0 across all rows. If your flock has started laying eggs, please ensure your column header is named 'Eggs Collected' or 'Daily Collected'.";
+      }
+
       res.json({
         type,
         validationSummary,
@@ -431,8 +676,8 @@ export const bulkImportControllers = {
 
       } else if (type === 'daily-logs') {
         for (const pr of validRecords) {
-          const rec = pr.record;
-          const logDate = rec.LogDate;
+          const rec = normalizeRecordKeys(pr.record);
+          const logDate = cleanDate(rec.LogDate);
           const flockId = rec._flockId;
 
           // Re-verify duplicates
@@ -446,16 +691,16 @@ export const bulkImportControllers = {
           const flock = await query.get<{ Id: number, FarmId: number, TotalFeedCost: number, CurrentCount: number, Status: string, PerBirdPurchasePrice: number }>('SELECT * FROM Flocks WHERE Id = ?', [flockId]);
           const rowFarmId = (flock && flock.FarmId) ? flock.FarmId : (rec._farmId || targetFarmId);
 
-          const feedConsumed = parseFloat(rec.FeedConsumedKg || '0');
-          const mortality = parseInt(rec.MortalityCount || '0');
-          const eggs = parseInt(rec.EggsCollected || '0');
-          const damagedEggs = parseInt(rec.DamagedEggsCollected || '0');
-          const water = parseFloat(rec.WaterConsumed || '0');
-          const weight = parseFloat(rec.DailyAverageWeight || '0');
-          const birdsEatenBySelf = parseInt(rec.BirdsEatenBySelf || '0');
-          const birdsEatenValue = parseFloat(rec.BirdsEatenValue || '0');
-          const eggsGifted = parseInt(rec.EggsGifted || '0');
-          const eggsGiftedValue = parseFloat(rec.EggsGiftedValue || '0');
+          const feedConsumed = cleanFloat(rec.FeedConsumedKg || '0');
+          const mortality = cleanInt(rec.MortalityCount || '0');
+          const eggs = cleanInt(rec.EggsCollected || '0');
+          const damagedEggs = cleanInt(rec.DamagedEggsCollected || '0');
+          const water = cleanFloat(rec.WaterConsumed || '0');
+          const weight = cleanFloat(rec.DailyAverageWeight || '0');
+          const birdsEatenBySelf = cleanInt(rec.BirdsEatenBySelf || '0');
+          const birdsEatenValue = cleanFloat(rec.BirdsEatenValue || '0');
+          const eggsGifted = cleanInt(rec.EggsGifted || '0');
+          const eggsGiftedValue = cleanFloat(rec.EggsGiftedValue || '0');
           const notes = rec.Notes || '';
 
           // Look up or fallback/create feed item dynamically
@@ -696,6 +941,9 @@ export const bulkImportControllers = {
 
           saveCount++;
         }
+
+        // Reconcile and synchronize all flock head counts, mortalities, and feed costs across SQLite and Supabase
+        await reconcileAllFlocksInventory();
 
       } else if (type === 'purchases') {
         for (const pr of validRecords) {

@@ -16,13 +16,14 @@ import {
   recipeControllers,
   staffControllers,
   ledgerControllers,
-  sysDashboardControllers
+  sysDashboardControllers,
+  developerControllers
 } from './controllers.js';
 import { backupControllers } from './backups.js';
 import { settingsControllers, userManagementControllers } from './settingsControllers.js';
 import { bulkImportControllers } from './bulkImportControllers.js';
 import { migrationControllers } from './migrationControllers.js';
-import { getSupabaseFarms, createSupabaseFarm, syncSupabaseToLocal, syncAllTablesBidirectional } from './supabase.js';
+import { getSupabaseFarms, createSupabaseFarm, syncSupabaseToLocal, syncAllTablesBidirectional, reconcileAllFlocksInventory } from './supabase.js';
 
 let dbInitPromise: Promise<void> | null = null;
 
@@ -35,6 +36,8 @@ export function ensureDatabaseInitialized(): Promise<void> {
         console.log('[App Init] Database initialization complete.');
         // Synchronize Supabase Cloud operational tables with local SQLite
         await syncAllTablesBidirectional();
+        // Reconcile all flock inventories with daily logs and mortalities
+        await reconcileAllFlocksInventory();
         // Run background biological flock aging check
         await settingsControllers.backgroundSyncAges();
       } catch (err) {
@@ -108,6 +111,14 @@ apiRouter.get('/egg_inventories', async (req, res) => {
 // 3. Flocks Register Block
 apiRouter.get('/flocks', flockControllers.list);
 apiRouter.post('/flocks', flockControllers.create);
+apiRouter.post('/flocks/reconcile', async (req, res) => {
+  try {
+    await reconcileAllFlocksInventory();
+    res.json({ success: true, message: 'All flock inventories successfully reconciled with logs.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 apiRouter.put('/flocks/:id', flockControllers.update);
 apiRouter.delete('/flocks/:id', flockControllers.delete);
 
@@ -261,9 +272,10 @@ apiRouter.post('/backups/gdrive/disconnect', backupControllers.disconnectGDrive)
 apiRouter.post('/backups/github/configure', backupControllers.configureGitHub);
 apiRouter.get('/backups/status', backupControllers.getStatus);
 
-// Developer Migration API
+// Developer Migration & Hard Reset API
 apiRouter.post('/migration/analyze', migrationControllers.analyzeLegacyBackup);
 apiRouter.post('/migration/execute', migrationControllers.executeMigration);
+apiRouter.post('/developer/hard-reset', developerControllers.hardReset);
 
 // Bi-Directional Multi-Device Cloud & Local Synchronization
 apiRouter.post('/sync/record', async (req, res) => {

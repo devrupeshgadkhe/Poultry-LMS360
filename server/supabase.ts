@@ -355,8 +355,31 @@ export async function syncRecordToSupabase(tableName: string, record: any): Prom
   if (!supabaseServer || !record) return;
   try {
     const cleanRecord = { ...record };
-    // Upsert by Id if Id is present and > 0, otherwise insert
     if (cleanRecord.Id) {
+      // 1. Attempt direct update first - handles partial field updates (e.g. CurrentCount, TotalFeedCost)
+      // without triggering NOT NULL constraint violations for omitted columns
+      const { data, error: updateErr } = await supabaseServer
+        .from(tableName)
+        .update(cleanRecord)
+        .eq('Id', cleanRecord.Id)
+        .select('Id');
+
+      if (!updateErr && data && data.length > 0) {
+        return; // Successfully updated in Supabase
+      }
+
+      // 2. If row was not found to update (e.g. brand new row), try fetching full row from SQLite
+      try {
+        const fullRow = await query.get(`SELECT * FROM ${tableName} WHERE Id = ?`, [cleanRecord.Id]);
+        if (fullRow) {
+          const { error: fullUpsertErr } = await supabaseServer
+            .from(tableName)
+            .upsert([fullRow], { onConflict: 'Id' });
+          if (!fullUpsertErr) return;
+        }
+      } catch {}
+
+      // 3. Fallback upsert
       const { error } = await supabaseServer.from(tableName).upsert([cleanRecord], { onConflict: 'Id' });
       if (error) {
         console.warn(`[Supabase Push] Warning upserting to ${tableName}:`, error.message);
@@ -369,6 +392,56 @@ export async function syncRecordToSupabase(tableName: string, record: any): Prom
     }
   } catch (err: any) {
     console.warn(`[Supabase Push] Failed for ${tableName}:`, err.message);
+  }
+}
+
+/**
+ * Reconciles bird head count (CurrentCount), mortality rates, and feed costs across all flocks in SQLite and Supabase
+ */
+export async function reconcileAllFlocksInventory(): Promise<void> {
+  try {
+    const flocks = await query.all<any>('SELECT * FROM Flocks');
+    for (const f of flocks) {
+      const logStats = await query.get<{ totalMortality: number, totalBirdsEaten: number, totalFeedCost: number }>(`
+        SELECT 
+          IFNULL(SUM(MortalityCount), 0) as totalMortality,
+          IFNULL(SUM(BirdsEatenBySelf), 0) as totalBirdsEaten,
+          IFNULL(SUM(FeedCost), 0) as totalFeedCost
+        FROM DailyLogs
+        WHERE FlockId = ?
+      `, [f.Id]);
+
+      const birdSales = await query.get<{ totalSold: number }>(`
+        SELECT IFNULL(SUM(Quantity), 0) as totalSold
+        FROM SaleItems
+        WHERE FlockId = ? AND ItemType = 'Bird'
+      `, [f.Id]);
+
+      const totalLost = (logStats?.totalMortality || 0) + (logStats?.totalBirdsEaten || 0) + (birdSales?.totalSold || 0);
+      const accurateCount = Math.max(0, f.InitialCount - totalLost);
+      const status = accurateCount <= 0 ? 'Inactive' : f.Status;
+      const feedCost = logStats?.totalFeedCost || f.TotalFeedCost || 0;
+
+      if (f.CurrentCount !== accurateCount || f.TotalFeedCost !== feedCost) {
+        console.log(`[Reconcile Flocks] Reconciling Flock #${f.Id} (${f.FlockName}): CurrentCount ${f.CurrentCount} -> ${accurateCount}, FeedCost ${f.TotalFeedCost} -> ${feedCost}`);
+        await query.run('UPDATE Flocks SET CurrentCount = ?, TotalFeedCost = ?, Status = ? WHERE Id = ?', [accurateCount, feedCost, status, f.Id]);
+      }
+
+      // Ensure Supabase is also strictly synchronized
+      if (supabaseServer) {
+        try {
+          await supabaseServer.from('Flocks').update({
+            CurrentCount: accurateCount,
+            TotalFeedCost: feedCost,
+            Status: status
+          }).eq('Id', f.Id);
+        } catch (sErr: any) {
+          console.warn(`[Reconcile Flocks] Supabase update warning for Flock #${f.Id}:`, sErr.message);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error('[Reconcile Flocks] Error reconciling flock inventory:', err.message);
   }
 }
 
