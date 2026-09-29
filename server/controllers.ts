@@ -115,7 +115,9 @@ export async function cleanDuplicateEggInventories(targetFarmId?: number): Promi
           for (const dup of duplicates) {
             await query.run('DELETE FROM EggInventories WHERE Id = ?', [dup.Id]);
             if (supabaseServer) {
-              await supabaseServer.from('EggInventories').delete().eq('Id', dup.Id).catch(() => {});
+              try {
+                await supabaseServer.from('EggInventories').delete().eq('Id', dup.Id);
+              } catch {}
             }
           }
         }
@@ -3819,10 +3821,16 @@ export const developerControllers = {
               'AuditLogs', 'JavascriptErrors'
             ];
             for (const tbl of sbTables) {
-              await supabaseServer.from(tbl).delete().neq('Id', -1).catch(() => {});
+              try {
+                await supabaseServer.from(tbl).delete().neq('Id', -1);
+              } catch {}
             }
-            await supabaseServer.from('EggInventories').update({ Quantity: 0 }).neq('Id', -1).catch(() => {});
-            await supabaseServer.from('Inventories').update({ CurrentStock: 0 }).neq('Id', -1).catch(() => {});
+            try {
+              await supabaseServer.from('EggInventories').update({ Quantity: 0 }).neq('Id', -1);
+            } catch {}
+            try {
+              await supabaseServer.from('Inventories').update({ CurrentStock: 0 }).neq('Id', -1);
+            } catch {}
           } catch (sbErr: any) {
             console.warn('[Hard Reset All Supabase] Warning:', sbErr.message);
           }

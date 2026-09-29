@@ -9,7 +9,11 @@ import {
   ShieldAlert, 
   Trash2, 
   Globe, 
-  Server 
+  Server,
+  AlertTriangle,
+  RotateCcw,
+  CheckCircle2,
+  Building2
 } from 'lucide-react';
 import { translations, Language } from '../translations';
 
@@ -17,7 +21,7 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
   const t = translations[currentLanguage];
   
   // Developer Tools tab navigation
-  const [activeDevTab, setActiveDevTab] = useState<'sql' | 'audit' | 'errors'>('sql');
+  const [activeDevTab, setActiveDevTab] = useState<'sql' | 'audit' | 'errors' | 'hard-reset'>('sql');
 
   // SQL State
   const [sql, setSql] = useState('SELECT * FROM Users;');
@@ -34,10 +38,78 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
   const [loadingErrors, setLoadingErrors] = useState(false);
   const [expandedErrorId, setExpandedErrorId] = useState<number | null>(null);
 
+  // Hard Reset State
+  const [farms, setFarms] = useState<any[]>([]);
+  const [resetScope, setResetScope] = useState<'particular' | 'all'>('particular');
+  const [selectedFarmId, setSelectedFarmId] = useState<number>(1);
+  const [confirmText, setConfirmText] = useState('');
+  const [understandChecked, setUnderstandChecked] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetResult, setResetResult] = useState<{ success: boolean; message: string } | null>(null);
+
   useEffect(() => {
     fetchAudits();
     fetchErrors();
+    fetchFarms();
   }, []);
+
+  const fetchFarms = async () => {
+    try {
+      const res = await fetch('/api/farms');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setFarms(data);
+          setSelectedFarmId(data[0].Id);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch farms:', e);
+    }
+  };
+
+  const handleExecuteHardReset = async () => {
+    if (confirmText !== 'RESET') {
+      alert('Please type "RESET" to confirm.');
+      return;
+    }
+    if (!understandChecked) {
+      alert('Please check the confirmation box acknowledging that this data wipe is permanent.');
+      return;
+    }
+
+    try {
+      setIsResetting(true);
+      setResetResult(null);
+
+      const res = await fetch('/api/developer/hard-reset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Email': localStorage.getItem('userEmail') || 'admin'
+        },
+        body: JSON.stringify({
+          scope: resetScope,
+          farmId: selectedFarmId
+        })
+      });
+
+      const body = await res.json();
+      if (!res.ok) {
+        setResetResult({ success: false, message: body.error || 'Hard reset request failed.' });
+      } else {
+        setResetResult({ success: true, message: body.message || 'Hard reset completed successfully.' });
+        setConfirmText('');
+        setUnderstandChecked(false);
+        window.dispatchEvent(new CustomEvent('farm-data-updated'));
+        fetchAudits();
+      }
+    } catch (err: any) {
+      setResetResult({ success: false, message: err.message || 'Network error during hard reset.' });
+    } finally {
+      setIsResetting(false);
+    }
+  };
 
   const fetchAudits = async () => {
     try {
@@ -166,6 +238,22 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
         >
           <ShieldAlert className={`h-4 w-4 text-rose-600 ${jsErrors.length > 0 ? 'animate-pulse' : ''}`} />
           JS & Runtime Error Logger ({jsErrors.length})
+        </button>
+        <button
+          onClick={() => {
+            setActiveDevTab('hard-reset');
+            fetchFarms();
+            setResetResult(null);
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold font-mono border-b-2 tracking-wide whitespace-nowrap smooth-hover ${
+            activeDevTab === 'hard-reset'
+              ? 'border-red-600 text-red-600'
+              : 'border-transparent text-slate-500 hover:text-red-500'
+          }`}
+          id="tab-btn-hard-reset"
+        >
+          <RotateCcw className="h-4 w-4 text-red-600" />
+          Data Wipe & Hard Reset
         </button>
       </div>
 
@@ -423,6 +511,184 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Hard Reset View Panel */}
+      {activeDevTab === 'hard-reset' && (
+        <div className="space-y-6 animate-fade-in" id="hard-reset-panel">
+          {/* Warning Banner */}
+          <div className="bg-red-50 border-2 border-red-200 rounded-3xl p-6 shadow-sm">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-red-100 rounded-2xl text-red-600 shrink-0 mt-0.5">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-base font-bold text-red-950 flex items-center gap-2">
+                  System Database Hard Reset & Factory Purge
+                </h2>
+                <p className="text-sm text-red-700 leading-relaxed">
+                  Use this tool to completely wipe test data, remove lingering logs, and reset egg inventory counts to zero. All operations are atomic, recorded in the audit trail, and synchronize across both local SQLite and cloud Supabase tables.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Reset Result Message */}
+          {resetResult && (
+            <div className={`p-4 rounded-2xl border flex items-center gap-3 ${
+              resetResult.success 
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+                : 'bg-rose-50 border-rose-200 text-rose-800'
+            }`}>
+              {resetResult.success ? (
+                <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0" />
+              )}
+              <div className="text-sm font-semibold">{resetResult.message}</div>
+            </div>
+          )}
+
+          {/* Scope Selection Options */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Option A: Particular Farm */}
+            <div 
+              onClick={() => setResetScope('particular')}
+              className={`p-6 rounded-3xl border-2 cursor-pointer transition-all ${
+                resetScope === 'particular'
+                  ? 'border-indigo-600 bg-indigo-50/40 shadow-md ring-2 ring-indigo-500/20'
+                  : 'border-slate-200 bg-white hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className={`p-2 rounded-xl ${resetScope === 'particular' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    <Building2 className="h-5 w-5" />
+                  </div>
+                  <h3 className="font-bold text-slate-900 text-sm">Particular Farm Reset</h3>
+                </div>
+                <input 
+                  type="radio" 
+                  name="resetScope" 
+                  checked={resetScope === 'particular'} 
+                  onChange={() => setResetScope('particular')}
+                  className="h-4 w-4 text-indigo-600 border-slate-300 focus:ring-indigo-500" 
+                />
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                Wipes all transactional data (Flocks, Daily Records, Vaccinations, Sales, Purchases, Feed Logs, Finances) for ONE selected farm. Egg inventories are reset to zero. Farm profile and users remain intact.
+              </p>
+              
+              {resetScope === 'particular' && (
+                <div className="mt-4 pt-4 border-t border-indigo-100 space-y-2">
+                  <label className="text-xs font-semibold text-slate-700 block">
+                    Select Target Farm to Reset:
+                  </label>
+                  <select
+                    value={selectedFarmId}
+                    onChange={(e) => setSelectedFarmId(Number(e.target.value))}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    {farms.map((f: any) => (
+                      <option key={f.Id} value={f.Id}>
+                        {f.FarmName} (Farm #{f.Id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Option B: All Farms Reset */}
+            <div 
+              onClick={() => setResetScope('all')}
+              className={`p-6 rounded-3xl border-2 cursor-pointer transition-all ${
+                resetScope === 'all'
+                  ? 'border-red-600 bg-red-50/40 shadow-md ring-2 ring-red-500/20'
+                  : 'border-slate-200 bg-white hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className={`p-2 rounded-xl ${resetScope === 'all' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    <RotateCcw className="h-5 w-5" />
+                  </div>
+                  <h3 className="font-bold text-slate-900 text-sm">All Farms Hard Reset (Fresh Start)</h3>
+                </div>
+                <input 
+                  type="radio" 
+                  name="resetScope" 
+                  checked={resetScope === 'all'} 
+                  onChange={() => setResetScope('all')}
+                  className="h-4 w-4 text-red-600 border-slate-300 focus:ring-red-500" 
+                />
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed mb-4">
+                Purges ALL operational records across ALL farms in the entire system, restarts SQLite auto-increment ID counters to 1, and resets all egg inventories to zero. Restores a clean slate while preserving master Farm and User records.
+              </p>
+              {resetScope === 'all' && (
+                <div className="mt-4 pt-4 border-t border-red-100">
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold bg-red-100 text-red-800">
+                    Caution: Clears records for all {farms.length} registered farms
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Confirmation & Action Box */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-5">
+            <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Shield className="h-4 w-4 text-slate-700" />
+              Safety Verification & Execution
+            </h4>
+
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-700 block">
+                  To confirm, type <span className="font-mono font-bold text-red-600">RESET</span> in the box below:
+                </label>
+                <input
+                  type="text"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value.toUpperCase())}
+                  placeholder="RESET"
+                  className="w-full max-w-xs px-3.5 py-2.5 border-2 border-slate-300 rounded-xl text-sm font-mono tracking-widest focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                />
+              </div>
+
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  id="understand-check"
+                  checked={understandChecked}
+                  onChange={(e) => setUnderstandChecked(e.target.checked)}
+                  className="h-4 w-4 text-red-600 rounded border-slate-300 focus:ring-red-500 mt-0.5"
+                />
+                <label htmlFor="understand-check" className="text-xs text-slate-600 leading-relaxed cursor-pointer select-none">
+                  I confirm that I understand this hard reset is permanent, irreversible, and will completely wipe the selected records and reset egg inventories.
+                </label>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={handleExecuteHardReset}
+                  disabled={confirmText !== 'RESET' || !understandChecked || isResetting}
+                  className={`flex items-center gap-2 px-6 py-3 rounded-2xl text-xs font-bold font-mono tracking-wider transition-all shadow-sm ${
+                    confirmText === 'RESET' && understandChecked && !isResetting
+                      ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-200 cursor-pointer active:scale-95'
+                      : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                  }`}
+                  id="btn-execute-hard-reset"
+                >
+                  <RotateCcw className={`h-4 w-4 ${isResetting ? 'animate-spin' : ''}`} />
+                  {isResetting ? 'RESETTING SYSTEM DATA...' : `EXECUTE HARD RESET (${resetScope.toUpperCase()})`}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

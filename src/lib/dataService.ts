@@ -52,6 +52,16 @@ export const flockService = {
    * Fetch all flocks for a specific farm
    */
   async getFlocks(farmId: number): Promise<Flock[]> {
+    try {
+      const apiRes = await fetch(`/api/flocks?farmId=${farmId}`);
+      if (apiRes.ok) {
+        const apiFlocks = await apiRes.json();
+        if (Array.isArray(apiFlocks) && apiFlocks.length > 0) {
+          return apiFlocks;
+        }
+      }
+    } catch {}
+
     const { data, error } = await supabase
       .from('Flocks')
       .select('*')
@@ -66,22 +76,28 @@ export const flockService = {
     const rawFlocks = data || [];
     if (rawFlocks.length === 0) return [];
 
-    // Also fetch daily logs for egg collection, mortality and bird removal statistics
-    let logsMap: Record<number, { eggs: number; damaged: number; mortalities: number; birdsEaten: number }> = {};
+    // Also fetch daily logs for egg collection, mortality, laying days and feed costs
+    let logsMap: Record<number, { eggs: number; damaged: number; mortalities: number; birdsEaten: number; layingDays: Set<string>; feedCost: number }> = {};
     try {
       const { data: logs } = await supabase
         .from('DailyLogs')
-        .select('FlockId, EggsCollected, DamagedEggsCollected, MortalityCount, BirdsEatenBySelf')
+        .select('FlockId, LogDate, EggsCollected, DamagedEggsCollected, MortalityCount, BirdsEatenBySelf, FeedCost')
         .eq('FarmId', farmId);
       
       if (logs) {
         logs.forEach((log: any) => {
           const fid = log.FlockId;
-          if (!logsMap[fid]) logsMap[fid] = { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0 };
-          logsMap[fid].eggs += Number(log.EggsCollected) || 0;
-          logsMap[fid].damaged += Number(log.DamagedEggsCollected) || 0;
+          if (!logsMap[fid]) logsMap[fid] = { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0, layingDays: new Set(), feedCost: 0 };
+          const eColl = Number(log.EggsCollected) || 0;
+          const dmgColl = Number(log.DamagedEggsCollected) || 0;
+          logsMap[fid].eggs += eColl;
+          logsMap[fid].damaged += dmgColl;
           logsMap[fid].mortalities += Number(log.MortalityCount) || 0;
           logsMap[fid].birdsEaten += Number(log.BirdsEatenBySelf) || 0;
+          logsMap[fid].feedCost += Number(log.FeedCost) || 0;
+          if (eColl > 0 || dmgColl > 0) {
+            logsMap[fid].layingDays.add((log.LogDate || '').split('T')[0]);
+          }
         });
       }
     } catch (logErr) {
@@ -91,7 +107,7 @@ export const flockService = {
     const today = new Date();
     return rawFlocks.map((flock: any) => {
       const initCount = Number(flock.InitialCount) || 0;
-      const stats = logsMap[flock.Id] || { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0 };
+      const stats = logsMap[flock.Id] || { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0, layingDays: new Set<string>(), feedCost: 0 };
       const logMortality = stats.mortalities || 0;
       const logBirdsEaten = stats.birdsEaten || 0;
 
@@ -99,8 +115,7 @@ export const flockService = {
       const diffCount = Math.max(0, initCount - (Number(flock.CurrentCount) || 0));
       const deadCount = Math.max(logMortality, diffCount);
 
-      // Current bird inventory: if flock.CurrentCount in DB was not decremented and equals initial count while mortalities exist,
-      // or if CurrentCount exceeds the live count, accurately compute effective live count
+      // Current bird inventory: compute effective live count
       let currCount = Number(flock.CurrentCount) || 0;
       const computedLive = Math.max(0, initCount - deadCount - logBirdsEaten);
       if (currCount === initCount && (deadCount > 0 || logBirdsEaten > 0)) {
@@ -119,9 +134,14 @@ export const flockService = {
       const perBird = Number(flock.PerBirdPurchasePrice) || (initCount > 0 ? totalPurchase / initCount : 0);
 
       const totalEggs = stats.eggs + stats.damaged;
-      const hdp = (initCount * ageInDays) > 0 ? (totalEggs / (initCount * ageInDays)) * 100 : 0;
+      const layingDaysCount = stats.layingDays ? stats.layingDays.size : 0;
+      const avgLiveBirds = Math.max(1, (initCount + currCount) / 2);
+      const totalHenDays = avgLiveBirds * Math.max(1, layingDaysCount);
+      const hdp = (layingDaysCount > 0 && totalHenDays > 0 && totalEggs > 0)
+        ? Math.min(100, (totalEggs / totalHenDays) * 100)
+        : 0;
 
-      const feedCost = Number(flock.TotalFeedCost) || 0;
+      const feedCost = Math.max(stats.feedCost || 0, Number(flock.TotalFeedCost) || 0);
       const vaccineCost = Number(flock.TotalVaccineCost) || 0;
       const totalExpenses = totalPurchase + feedCost + vaccineCost;
       const perEggCost = totalEggs > 0 ? totalExpenses / totalEggs : 0;
@@ -219,13 +239,35 @@ export const flockService = {
    * Delete a flock
    */
   async deleteFlock(farmId: number, flockId: number): Promise<void> {
-    const { error } = await supabase
-      .from('Flocks')
-      .delete()
-      .eq('Id', flockId)
-      .eq('FarmId', farmId);
+    try {
+      // 1. Trigger backend API delete for atomic cascade across SQLite & EggInventories deduction
+      try {
+        await fetch(`/api/flocks/${flockId}`, {
+          method: 'DELETE',
+          headers: { 'X-User-Email': localStorage.getItem('userEmail') || 'admin' }
+        });
+      } catch (apiErr) {
+        console.warn('[flockService.deleteFlock] API notice:', apiErr);
+      }
 
-    if (error) {
+      // 2. Cascade delete in Supabase Cloud
+      await supabase.from('DailyLogs').delete().eq('FlockId', flockId).eq('FarmId', farmId);
+      await supabase.from('Vaccinations').delete().eq('FlockId', flockId).eq('FarmId', farmId);
+      await supabase.from('Flocks').delete().eq('Id', flockId).eq('FarmId', farmId);
+
+      // 3. If no flocks remain on this farm, reset egg inventory count to zero!
+      const { data: remainingFlocks } = await supabase
+        .from('Flocks')
+        .select('Id')
+        .eq('FarmId', farmId);
+
+      if (!remainingFlocks || remainingFlocks.length === 0) {
+        await supabase
+          .from('EggInventories')
+          .update({ Quantity: 0 })
+          .eq('FarmId', farmId);
+      }
+    } catch (error: any) {
       console.error('[flockService.deleteFlock] Error:', error.message);
       throw error;
     }
@@ -358,12 +400,23 @@ export const dailyLogService = {
         };
       });
 
-      // Sort newest date first
-      enrichedLogs.reverse();
+      // Sort strictly newest date first
+      enrichedLogs.sort((a: any, b: any) => {
+        const dateA = new Date((a.LogDate || '').split('T')[0]).getTime() || 0;
+        const dateB = new Date((b.LogDate || '').split('T')[0]).getTime() || 0;
+        if (dateB !== dateA) return dateB - dateA;
+        return (Number(b.Id) || 0) - (Number(a.Id) || 0);
+      });
       return enrichedLogs;
     } catch (enrichErr) {
       console.warn('[dailyLogService.getDailyLogs] Enrichment notice:', enrichErr);
-      return rawLogs.reverse();
+      rawLogs.sort((a: any, b: any) => {
+        const dateA = new Date((a.LogDate || '').split('T')[0]).getTime() || 0;
+        const dateB = new Date((b.LogDate || '').split('T')[0]).getTime() || 0;
+        if (dateB !== dateA) return dateB - dateA;
+        return (Number(b.Id) || 0) - (Number(a.Id) || 0);
+      });
+      return rawLogs;
     }
   },
 

@@ -80,6 +80,11 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
         if (!matches) return false;
       }
       return true;
+    }).sort((a, b) => {
+      const dateA = new Date((a.LogDate || '').split('T')[0]).getTime() || 0;
+      const dateB = new Date((b.LogDate || '').split('T')[0]).getTime() || 0;
+      if (dateB !== dateA) return dateB - dateA;
+      return (Number(b.Id) || 0) - (Number(a.Id) || 0);
     });
   }, [logs, selectedFlockFilter, startDateFilter, endDateFilter, searchQuery]);
 
@@ -441,7 +446,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
               >
                 <option value="">-- Choose Active Flock --</option>
                 {flocks.map(f => (
-                  <option key={f.Id} value={f.Id}>{f.FlockName} ({f.Breed})</option>
+                  <option key={f.Id} value={f.Id}>{f.FlockName}</option>
                 ))}
               </select>
             </div>

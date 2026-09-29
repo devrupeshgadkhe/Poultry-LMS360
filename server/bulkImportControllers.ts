@@ -274,11 +274,11 @@ export const bulkImportControllers = {
         'SELECT Id, ItemName, FarmId FROM Inventories WHERE FarmId = ? OR FarmId IS NULL',
         [targetFarmId]
       );
-      const flocks = await query.all<{ Id: number, FlockName: string, FarmId: number }>(
-        'SELECT Id, FlockName, FarmId FROM Flocks WHERE FarmId = ? OR FarmId IS NULL',
+      const flocks = await query.all<{ Id: number, FlockName: string, FarmId: number, Breed?: string }>(
+        'SELECT Id, FlockName, FarmId, Breed FROM Flocks WHERE FarmId = ? OR FarmId IS NULL',
         [targetFarmId]
       );
-      const allFlocks = await query.all<{ Id: number, FlockName: string, FarmId: number }>('SELECT Id, FlockName, FarmId FROM Flocks');
+      const allFlocks = await query.all<{ Id: number, FlockName: string, FarmId: number, Breed?: string }>('SELECT Id, FlockName, FarmId, Breed FROM Flocks');
       const suppliers = await query.all<{ Id: number, CompanyName: string, FarmId: number }>(
         'SELECT Id, CompanyName, FarmId FROM Suppliers WHERE FarmId = ? OR FarmId IS NULL',
         [targetFarmId]
@@ -405,9 +405,18 @@ export const bulkImportControllers = {
             status = 'Invalid';
           }
 
-          let matchedFlock = flocks.find(f => f.FlockName.toLowerCase().trim() === flockName.toLowerCase().trim());
+          let matchedFlock = flocks.find(f => (f.FlockName || '').toLowerCase().trim() === flockName.toLowerCase().trim());
           if (!matchedFlock) {
-            matchedFlock = allFlocks.find(f => f.FlockName.toLowerCase().trim() === flockName.toLowerCase().trim());
+            matchedFlock = allFlocks.find(f => (f.FlockName || '').toLowerCase().trim() === flockName.toLowerCase().trim());
+          }
+          if (!matchedFlock && /^\d+$/.test(flockName.trim())) {
+            matchedFlock = flocks.find(f => String(f.Id) === flockName.trim()) || allFlocks.find(f => String(f.Id) === flockName.trim());
+          }
+          if (!matchedFlock) {
+            const byBreed = flocks.filter(f => f.Breed && f.Breed.toLowerCase().trim() === flockName.toLowerCase().trim());
+            if (byBreed.length === 1) {
+              matchedFlock = byBreed[0];
+            }
           }
 
           if (!matchedFlock) {
@@ -942,7 +951,9 @@ export const bulkImportControllers = {
           saveCount++;
         }
 
-        // Reconcile and synchronize all flock head counts, mortalities, and feed costs across SQLite and Supabase
+        // Reconcile and synchronize all egg inventories and flock head counts across SQLite and Supabase
+        await cleanDuplicateEggInventories(targetFarmId);
+        await reconcileEggInventoryForFarm(targetFarmId);
         await reconcileAllFlocksInventory();
 
       } else if (type === 'purchases') {

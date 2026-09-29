@@ -202,6 +202,7 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
     if (!confirm('Are you sure you want to delete this flock record? All daily records will cascadingly deplete.')) return;
     try {
       await flockService.deleteFlock(farmId, id);
+      window.dispatchEvent(new CustomEvent('farm-data-updated'));
       fetchFlocks();
     } catch (e: any) {
       console.error('Error deleting flock in Supabase:', e);
@@ -210,6 +211,7 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
           method: 'DELETE',
           headers: { 'X-User-Email': localStorage.getItem('userEmail') || 'admin' }
         });
+        window.dispatchEvent(new CustomEvent('farm-data-updated'));
         fetchFlocks();
       } catch (err) {
         console.error(err);
