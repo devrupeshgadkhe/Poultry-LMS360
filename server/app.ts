@@ -276,6 +276,7 @@ apiRouter.get('/backups/status', backupControllers.getStatus);
 apiRouter.post('/migration/analyze', migrationControllers.analyzeLegacyBackup);
 apiRouter.post('/migration/execute', migrationControllers.executeMigration);
 apiRouter.post('/developer/hard-reset', developerControllers.hardReset);
+apiRouter.post('/developer/form-hard-reset', developerControllers.formHardReset);
 
 // Bi-Directional Multi-Device Cloud & Local Synchronization
 apiRouter.post('/sync/record', async (req, res) => {

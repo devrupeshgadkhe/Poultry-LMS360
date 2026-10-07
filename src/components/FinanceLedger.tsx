@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Trash2, Wallet, Landmark, Receipt, CircleAlert, Search, Filter, Pencil, Check, X, Tag, Calendar, Users, Eye } from 'lucide-react';
+import { Plus, Trash2, Wallet, Landmark, Receipt, CircleAlert, Search, Filter, Pencil, Check, X, Tag, Calendar, Users, Eye, RotateCcw } from 'lucide-react';
 import { FinancialTransaction, TransactionCategory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
@@ -408,6 +408,34 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
           >
             <Plus className="h-4 w-4 shrink-0" />
             {editingTxId ? 'Modify Voucher' : t.addTransactionBtn}
+          </button>
+          <button
+            onClick={async () => {
+              if (window.confirm('⚠️ Hard Reset Finance Form: Are you sure you want to delete all financial transactions and reset ledger amounts to zero? Other modules will remain untouched.')) {
+                try {
+                  const res = await fetch('/api/developer/form-hard-reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ formKey: 'finance', farmId })
+                  });
+                  const data = await res.json();
+                  if (data.success) {
+                    alert(data.message || 'Finance form reset successfully!');
+                    window.dispatchEvent(new Event('farm-data-updated'));
+                    if (typeof fetchData === 'function') fetchData();
+                  } else {
+                    alert(data.error || 'Failed to reset form');
+                  }
+                } catch (err: any) {
+                  alert(err.message || 'Error executing form reset');
+                }
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-xs transition"
+            title="Hard Reset this form (Clear transactions, reset amounts to 0)"
+          >
+            <RotateCcw className="h-4 w-4 shrink-0" />
+            <span className="hidden sm:inline">Form Reset</span>
           </button>
         </div>
       </div>

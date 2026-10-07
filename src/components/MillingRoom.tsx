@@ -16,7 +16,7 @@ import {
   Info,
   CheckCircle2,
   Wheat
-} from 'lucide-react';
+, RotateCcw } from 'lucide-react';
 import { FoodRecipe, Inventory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
@@ -429,7 +429,36 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
           </div>
         </div>
 
-        {/* Quick Nav Tabs */}
+                  <button
+            onClick={async () => {
+              if (window.confirm("⚠️ Hard Reset Form (Milling Room): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
+                try {
+                  const res = await fetch('/api/developer/form-hard-reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ formKey: 'milling', farmId })
+                  });
+                  const data = await res.json();
+                  if (data.success) {
+                    alert(data.message || 'Milling Room reset successfully!');
+                    window.dispatchEvent(new Event('farm-data-updated'));
+                    if (typeof fetchData === 'function') fetchData();
+                    else window.location.reload();
+                  } else {
+                    alert(data.error || 'Failed to reset form');
+                  }
+                } catch (err: any) {
+                  alert(err.message || 'Error executing form reset');
+                }
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
+            title="Hard Reset this form (Clear records, reset amounts to 0)"
+          >
+            <RotateCcw className="h-4 w-4 shrink-0" />
+            <span className="hidden sm:inline">Form Reset</span>
+          </button>
+{/* Quick Nav Tabs */}
         <div className="flex items-center gap-1 bg-slate-100 p-1.5 rounded-xl border border-slate-200/80 shrink-0 self-start sm:self-center">
           <button
             onClick={() => { setActiveTab('produce'); setProductionSuccess(null); setProductionError(null); }}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Trash2, ShieldCheck, HeartPulse, User, Edit2, ShieldAlert, Clock } from 'lucide-react';
+import { Plus, Trash2, ShieldCheck, HeartPulse, User, Edit2, ShieldAlert, Clock , RotateCcw } from 'lucide-react';
 import { Vaccination, Flock } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
@@ -216,6 +216,35 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
         </div>
         
         <div className="flex items-center gap-2">
+          <button
+            onClick={async () => {
+              if (window.confirm("⚠️ Hard Reset Form (Vaccinations): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
+                try {
+                  const res = await fetch('/api/developer/form-hard-reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ formKey: 'vaccinations', farmId })
+                  });
+                  const data = await res.json();
+                  if (data.success) {
+                    alert(data.message || 'Vaccinations reset successfully!');
+                    window.dispatchEvent(new Event('farm-data-updated'));
+                    if (typeof fetchData === 'function') fetchData();
+                    else window.location.reload();
+                  } else {
+                    alert(data.error || 'Failed to reset form');
+                  }
+                } catch (err: any) {
+                  alert(err.message || 'Error executing form reset');
+                }
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
+            title="Hard Reset this form (Clear records, reset amounts to 0)"
+          >
+            <RotateCcw className="h-4 w-4 shrink-0" />
+            <span className="hidden sm:inline">Form Reset</span>
+          </button>
           {activeAlertCount > 0 && (
             <div className="px-3 py-1 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-lg animate-pulse flex items-center gap-1">
               <ShieldAlert className="h-3.5 w-3.5 text-red-600 animate-bounce" />

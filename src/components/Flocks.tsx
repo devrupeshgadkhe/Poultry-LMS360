@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Trash2, Calendar, TrendingUp, Archive, Activity, Edit, X } from 'lucide-react';
+import { Plus, Trash2, Calendar, TrendingUp, Archive, Activity, Edit, X , RotateCcw } from 'lucide-react';
 import { Flock } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
