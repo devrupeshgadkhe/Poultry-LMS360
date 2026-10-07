@@ -465,21 +465,21 @@ export async function deleteRecordFromSupabase(tableName: string, id: number, fa
 }
 
 const OPERATIONAL_TABLES = [
-  'Flocks',
-  'DailyLogs',
-  'Inventories',
-  'EggInventories',
-  'Vaccinations',
+  'TransactionCategories',
+  'Staff',
   'Customers',
   'Suppliers',
+  'Flocks',
+  'Inventories',
+  'EggInventories',
+  'FoodRecipes',
   'Purchases',
   'PurchaseItems',
   'Sales',
   'SaleItems',
-  'FoodRecipes',
-  'FinancialTransactions',
-  'TransactionCategories',
-  'Staff'
+  'DailyLogs',
+  'Vaccinations',
+  'FinancialTransactions'
 ];
 
 /**
@@ -491,6 +491,11 @@ export async function syncAllTablesBidirectional(): Promise<Record<string, { pul
   if (!supabaseServer) return stats;
 
   try {
+    // Temporarily turn off foreign keys during bulk sync to prevent constraint violations
+    try {
+      await query.run('PRAGMA foreign_keys = OFF;');
+    } catch {}
+
     // 1. Sync Farms, FarmSettings, & Users first from Supabase Cloud (SSOT)
     await syncSupabaseToLocal();
 
@@ -518,23 +523,43 @@ export async function syncAllTablesBidirectional(): Promise<Record<string, { pul
               const columns = keys.map(k => `\`${k}\``).join(', ');
               const placeholders = keys.map(() => '?').join(', ');
               const values = keys.map(k => filteredRow[k]);
-              await query.run(
-                `INSERT OR REPLACE INTO \`${table}\` (${columns}) VALUES (${placeholders})`,
-                values
-              );
+              
+              if (keys.includes('Id')) {
+                const updateAssignments = keys
+                  .filter(k => k !== 'Id')
+                  .map(k => `\`${k}\` = excluded.\`${k}\``)
+                  .join(', ');
+                if (updateAssignments.length > 0) {
+                  await query.run(
+                    `INSERT INTO \`${table}\` (${columns}) VALUES (${placeholders}) ON CONFLICT(Id) DO UPDATE SET ${updateAssignments}`,
+                    values
+                  );
+                } else {
+                  await query.run(
+                    `INSERT INTO \`${table}\` (${columns}) VALUES (${placeholders}) ON CONFLICT(Id) DO NOTHING`,
+                    values
+                  );
+                }
+              } else {
+                await query.run(
+                  `INSERT OR REPLACE INTO \`${table}\` (${columns}) VALUES (${placeholders})`,
+                  values
+                );
+              }
               stats[table].pulled++;
             }
           }
         }
-        // Note: Supabase Cloud is the Single Source of Truth (SSOT).
-        // We do NOT blindly push local SQLite tables to Supabase on server boot,
-        // which prevents development/preview restarts from ever overwriting or corrupting production data.
       } catch (tblErr: any) {
         console.warn(`[Cloud Sync] Warning on table ${table}:`, tblErr.message);
       }
     }
   } catch (err: any) {
     console.error('[Cloud Sync] Critical error:', err.message);
+  } finally {
+    try {
+      await query.run('PRAGMA foreign_keys = ON;');
+    } catch {}
   }
 
   return stats;
