@@ -1,22 +1,27 @@
-name: Supabase Keep Alive
+name: Supabase Keep Alive & Heartbeat
 
 on:
   schedule:
-    # Runs every 3 days at 06:00 UTC to reset Supabase's 7-day inactivity timer
-    - cron: '0 6 */3 * *'
-  workflow_dispatch: # Allows manual trigger from GitHub Actions UI
+    # Runs every 2 days at 04:00 UTC to automatically insert heartbeat entries into Supabase
+    - cron: '0 4 */2 * *'
+  workflow_dispatch: # Allows manual trigger anytime from GitHub Actions UI
 
 jobs:
-  ping:
+  heartbeat:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Supabase Database
+      - name: Insert Heartbeat into Supabase AuditLogs
         run: |
-          echo "Pinging Supabase database to reset inactivity timer..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://vrujjlytlbjezesupoxq.supabase.co/rest/v1/Farms?select=Id&limit=1"             -H "apikey: ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN' }}"             -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN' }}")
-          echo "Supabase response status: $STATUS"
-          if [ "$STATUS" -eq 200 ]; then
-            echo "✅ Supabase project successfully kept active!"
+          echo "Inserting keep-alive heartbeat entry to Supabase database..."
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST             "https://vrujjlytlbjezesupoxq.supabase.co/rest/v1/AuditLogs"             -H "apikey: ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN' }}"             -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN' }}"             -H "Content-Type: application/json"             -H "Prefer: return=minimal"             -d "{"FarmId": 1, "UserEmail": "system.cron@poultrylms.com", "Module": "KeepAlive", "Action": "Heartbeat Ping", "Parameters": "Automatic heartbeat ping at $TIMESTAMP to reset Supabase inactivity timer", "Status": "SUCCESS"}")
+
+          echo "Supabase insert HTTP Status: $STATUS"
+
+          if [ "$STATUS" -eq 201 ] || [ "$STATUS" -eq 200 ]; then
+            echo "✅ Heartbeat entry written successfully to Supabase database!"
           else
-            echo "⚠️ Non-200 status received: $STATUS"
+            echo "⚠️ Insert returned $STATUS. Executing fallback query..."
+            curl -s -o /dev/null -w "%{http_code}"               "https://vrujjlytlbjezesupoxq.supabase.co/rest/v1/Farms?select=Id&limit=1"               -H "apikey: ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN' }}"               -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN' }}"
           fi

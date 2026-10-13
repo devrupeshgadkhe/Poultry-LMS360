@@ -23,6 +23,7 @@ import { backupControllers } from './backups.js';
 import { settingsControllers, userManagementControllers } from './settingsControllers.js';
 import { bulkImportControllers } from './bulkImportControllers.js';
 import { migrationControllers } from './migrationControllers.js';
+import { supabaseServer } from './supabase.js';
 import { getSupabaseFarms, createSupabaseFarm, syncSupabaseToLocal, syncAllTablesBidirectional, reconcileAllFlocksInventory } from './supabase.js';
 
 let dbInitPromise: Promise<void> | null = null;
@@ -277,6 +278,36 @@ apiRouter.post('/migration/analyze', migrationControllers.analyzeLegacyBackup);
 apiRouter.post('/migration/execute', migrationControllers.executeMigration);
 apiRouter.post('/developer/hard-reset', developerControllers.hardReset);
 apiRouter.post('/developer/form-hard-reset', developerControllers.formHardReset);
+
+// System Heartbeat endpoint (Records live keep-alive entries in AuditLogs and resets Supabase 7-day inactivity)
+apiRouter.all('/system/heartbeat', async (req, res) => {
+  try {
+    const timestamp = new Date().toISOString();
+    const source = (req.query.source || req.body?.source || 'api-heartbeat') as string;
+    
+    // 1. Insert into Supabase AuditLogs
+    if (supabaseServer) {
+      await supabaseServer.from('AuditLogs').insert({
+        FarmId: 1,
+        UserEmail: 'system.heartbeat@poultrylms.com',
+        Module: 'KeepAlive',
+        Action: 'Heartbeat Ping',
+        Parameters: `Automated ping from ${source} at ${timestamp}`,
+        Status: 'SUCCESS'
+      });
+    }
+
+    // 2. Also record in local SQLite
+    await query.run(`
+      INSERT INTO AuditLogs (FarmId, Timestamp, UserEmail, Module, Action, Parameters, Status)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [1, timestamp, 'system.heartbeat@poultrylms.com', 'KeepAlive', 'Heartbeat Ping', `Automated ping from ${source}`, 'SUCCESS']);
+
+    res.json({ success: true, timestamp, source, message: 'Heartbeat successfully recorded in database' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Bi-Directional Multi-Device Cloud & Local Synchronization
 apiRouter.post('/sync/record', async (req, res) => {
