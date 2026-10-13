@@ -1,0 +1,22 @@
+name: Supabase Keep Alive
+
+on:
+  schedule:
+    # Runs every 3 days at 06:00 UTC to reset Supabase's 7-day inactivity timer
+    - cron: '0 6 */3 * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions UI
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase Database
+        run: |
+          echo "Pinging Supabase database to reset inactivity timer..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://vrujjlytlbjezesupoxq.supabase.co/rest/v1/Farms?select=Id&limit=1"             -H "apikey: ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN' }}"             -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN' }}")
+          echo "Supabase response status: $STATUS"
+          if [ "$STATUS" -eq 200 ]; then
+            echo "✅ Supabase project successfully kept active!"
+          else
+            echo "⚠️ Non-200 status received: $STATUS"
+          fi
