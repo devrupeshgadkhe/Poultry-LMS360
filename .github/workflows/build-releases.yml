@@ -1,8 +1,10 @@
-name: Build Windows EXE & Web Release
+name: Build Releases (.exe & .apk)
 
 on:
   push:
     branches: [ master, main ]
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -32,3 +34,19 @@ jobs:
         with:
           name: Poultry-LMS-360-Windows-Setup
           path: dist-desktop/*.exe
+
+      - name: Publish GitHub Release with .exe Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-desktop/*.exe
+          tag_name: v1.0.0-release
+          name: "Poultry LMS 360 v1.0.0 (Windows & Web Release)"
+          body: |
+            ### 🚀 Poultry LMS 360 - Official Release
+            - **Windows Installer (.exe):** Attached below (`Poultry-LMS-360 Setup.exe`).
+            - **Cloud Backend:** Connected to Supabase Cloud Database (Zero local sync dependency).
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
