@@ -52,6 +52,7 @@ export function ensureDatabaseInitialized(): Promise<void> {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 
 // 1. Sensitive Data Masking in Logs (Masks passwords, tokens, API keys, PII)
 const originalLog = console.log;
@@ -77,6 +78,7 @@ const apiLimiter = rateLimit({
   max: 500,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, trustProxy: false },
   message: { error: 'Too many requests from this IP, please try again after 15 minutes.' }
 });
 
@@ -85,6 +87,7 @@ const authLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, trustProxy: false },
   message: { error: 'Too many authentication attempts, please try again later.' }
 });
 

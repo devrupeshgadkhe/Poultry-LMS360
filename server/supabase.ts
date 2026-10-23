@@ -525,20 +525,27 @@ export async function syncAllTablesBidirectional(): Promise<Record<string, { pul
               const values = keys.map(k => filteredRow[k]);
               
               if (keys.includes('Id')) {
-                const updateAssignments = keys
-                  .filter(k => k !== 'Id')
-                  .map(k => `\`${k}\` = excluded.\`${k}\``)
-                  .join(', ');
-                if (updateAssignments.length > 0) {
+                if (table === 'TransactionCategories') {
                   await query.run(
-                    `INSERT INTO \`${table}\` (${columns}) VALUES (${placeholders}) ON CONFLICT(Id) DO UPDATE SET ${updateAssignments}`,
+                    `INSERT OR REPLACE INTO \`${table}\` (${columns}) VALUES (${placeholders})`,
                     values
                   );
                 } else {
-                  await query.run(
-                    `INSERT INTO \`${table}\` (${columns}) VALUES (${placeholders}) ON CONFLICT(Id) DO NOTHING`,
-                    values
-                  );
+                  const updateAssignments = keys
+                    .filter(k => k !== 'Id')
+                    .map(k => `\`${k}\` = excluded.\`${k}\``)
+                    .join(', ');
+                  if (updateAssignments.length > 0) {
+                    await query.run(
+                      `INSERT INTO \`${table}\` (${columns}) VALUES (${placeholders}) ON CONFLICT(Id) DO UPDATE SET ${updateAssignments}`,
+                      values
+                    );
+                  } else {
+                    await query.run(
+                      `INSERT INTO \`${table}\` (${columns}) VALUES (${placeholders}) ON CONFLICT(Id) DO NOTHING`,
+                      values
+                    );
+                  }
                 }
               } else {
                 await query.run(
