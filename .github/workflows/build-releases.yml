@@ -7,6 +7,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -40,13 +43,14 @@ jobs:
         with:
           files: |
             dist-desktop/*.exe
-          tag_name: v1.0.0-release
-          name: "Poultry LMS 360 v1.0.0 (Windows & Web Release)"
+          tag_name: v1.0.${{ github.run_number }}
+          name: "Poultry LMS 360 v1.0.${{ github.run_number }} (Windows & Web Release)"
           body: |
-            ### 🚀 Poultry LMS 360 - Official Release
-            - **Windows Installer (.exe):** Attached below (`Poultry-LMS-360 Setup.exe`).
-            - **Cloud Backend:** Connected to Supabase Cloud Database (Zero local sync dependency).
+            ### 🚀 Poultry LMS 360 - Official Professional Release
+            - **Windows Installer (.exe):** Attached below with custom professional icon and Supabase cloud integration.
+            - **Cloud Database:** Fully synchronized with Supabase Cloud (Zero local storage dependency).
           draft: false
           prerelease: false
+          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
