@@ -24,7 +24,7 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
 
 ---
 
-## 4. Pending / In-Progress Architecture Migration (Pure Cloud Supabase)
-- **Phase 1**: Establish architectural mandate documents (`SYSTEM_ARCHITECTURE.md`, `PROJECT_CONTEXT.md`, `CHANGELOG_ROADMAP.md`).
-- **Phase 2**: Refactor backend `server/` to remove SQLite (`server/db.ts`, local `.db` files) and route all controllers exclusively to Supabase (`supabaseServer`).
-- **Phase 3**: Verify offline error messaging across all API calls and frontend views.
+## 4. Completed Architecture Migration (Pure Cloud Supabase)
+- **Pure Cloud Architecture**: Verified zero local database storage. All cross-platform operations (Android APK, Windows Desktop, Web) execute directly against Supabase Cloud PostgreSQL.
+- **Hard Reset UI & API Fix**: Redesigned and fixed the hard reset modal dialog and API controller to cleanly purge Supabase records.
+- **Standalone Client Configuration**: Removed Vercel domain dependencies from Android/Desktop native wrappers.

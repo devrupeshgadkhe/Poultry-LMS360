@@ -22,4 +22,8 @@
 ---
 
 ## 2. Historical Changelog
-- **v1.0.9**: Added architecture governance docs, hard reset safety modals, persistent update notifications, custom menu scrollbars, and removed SQL CLI console.
+- **v1.0.9**: 
+  - Implemented pure cloud Supabase architecture across Android, Desktop, and Web.
+  - Fixed hard reset modal UI clarity and API execution to cleanly wipe cloud records.
+  - Removed Vercel domain dependencies from Android/Desktop apps.
+  - Updated architectural context and roadmap tracking files.
