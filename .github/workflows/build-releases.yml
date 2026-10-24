@@ -82,12 +82,14 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease || ./gradlew assembleDebug
+          ./gradlew assembleDebug --stacktrace
 
       - name: Stage APK Output
         run: |
           mkdir -p release-assets/android
           find android/app/build/outputs/apk -name "*.apk" -exec cp {} release-assets/android/Poultry-LMS-360.apk \;
+          echo "Staged Android APK:"
+          ls -la release-assets/android/
 
       - name: Upload Android APK Artifact (.apk)
         uses: actions/upload-artifact@v4
@@ -100,6 +102,7 @@ jobs:
   # ==========================================
   publish-release:
     needs: [build-windows, build-android]
+    if: always() && (needs.build-windows.result == 'success' || needs.build-android.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows Setup Artifact
@@ -107,12 +110,14 @@ jobs:
         with:
           name: windows-setup
           path: final-release/
+        continue-on-error: true
 
       - name: Download Android APK Artifact
         uses: actions/download-artifact@v4
         with:
           name: android-apk
           path: final-release/
+        continue-on-error: true
 
       - name: List Release Files
         run: |
