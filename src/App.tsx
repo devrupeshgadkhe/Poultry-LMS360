@@ -839,8 +839,150 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row text-slate-700 selection:bg-indigo-500 selection:text-white" id="agricultural-erp-spa">
       
-      {/* Dynamic desktop / mobile sidebar panel drawer */}
-      <aside className={`w-full ${sidebarCollapsed ? 'md:w-20' : 'md:w-64'} bg-[#032e1d] text-slate-300 flex flex-col border-r border-[#0d452f] shrink-0 select-none z-10 font-sans md:h-screen md:max-h-screen md:sticky md:top-0 transition-all duration-300`} id="erp-sidebar-console">
+      {/* 1. Mobile Top Navigation Bar (Phone / Tablet header) */}
+      <div className="md:hidden bg-[#032e1d] border-b border-[#0d452f] px-4 py-3 flex items-center justify-between sticky top-0 z-30 select-none shrink-0" id="mobile-top-bar">
+        <div className="flex items-center gap-2.5">
+          <span className="p-1.5 bg-indigo-600 text-white rounded-lg shadow-xs">
+            <Flame className="h-5 w-5 animate-pulse" />
+          </span>
+          <div className="min-w-0">
+            <span className="text-sm font-bold text-white block leading-tight truncate">Poultry LMS 360</span>
+            <span className="text-[10px] text-emerald-400 font-mono font-semibold block truncate">
+              {currentFarm?.FarmName || 'Layer Farm'}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {vaccineAlertsCount > 0 && (
+            <button
+              onClick={() => setActiveTab('Vaccinations')}
+              className="p-1.5 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded-lg text-xs flex items-center gap-1"
+              title="Vaccine Alerts Due"
+            >
+              <ShieldAlert className="h-4 w-4 text-rose-400" />
+              <span className="text-[10px] font-bold">{vaccineAlertsCount}</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => setMobileMenuOpen(true)}
+            className="p-2 rounded-xl bg-[#0a3f29] hover:bg-[#0e5236] text-white border border-[#0d5337] active:scale-95 transition-all cursor-pointer shadow-xs"
+            aria-label="Open Navigation Menu"
+            id="mobile-open-menu-btn"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* 2. Mobile Off-Canvas Navigation Drawer Backdrop */}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-xs z-50 md:hidden animate-fade-in transition-opacity"
+          onClick={() => setMobileMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* 3. Mobile Off-Canvas Navigation Drawer */}
+      <div
+        className={`fixed inset-y-0 left-0 w-[84%] max-w-xs bg-[#032e1d] text-slate-300 flex flex-col z-50 shadow-2xl border-r border-[#0d452f] md:hidden transform transition-transform duration-300 ease-in-out font-sans ${
+          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+        id="mobile-nav-drawer"
+      >
+        {/* Drawer Header */}
+        <div className="p-4 border-b border-[#0d452f] flex items-center justify-between shrink-0 bg-[#022417]">
+          <div className="flex items-center gap-2.5">
+            <span className="p-1.5 bg-indigo-600 text-white rounded-lg shadow-xs">
+              <Flame className="h-5 w-5" />
+            </span>
+            <div>
+              <span className="text-sm font-bold font-display text-white tracking-tight block">Poultry LMS 360</span>
+              <span className="text-[10px] text-indigo-400 font-mono font-semibold uppercase tracking-wider">Navigation Menu</span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setMobileMenuOpen(false)}
+            className="p-1.5 rounded-lg bg-[#0a3f29] hover:bg-[#0e5236] text-emerald-200 hover:text-white border border-[#0d5337] active:scale-95 transition-colors cursor-pointer"
+            aria-label="Close Navigation Menu"
+            id="mobile-close-menu-btn"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Drawer Scrollable Navigation Links (Cleanly separated from user details) */}
+        <nav className="flex-1 overflow-y-auto p-3 space-y-1.5 overscroll-contain">
+          {menuItems.map((item) => {
+            if (item.roles && !item.roles.includes(userRole || '')) return null;
+            if (!canAccessTab(item.name)) return null;
+
+            const Icon = item.icon;
+            const isActive = activeTab === item.name;
+            const t = translations[currentLanguage];
+
+            return (
+              <button
+                key={item.name}
+                onClick={() => {
+                  setActiveTab(item.name);
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center rounded-xl text-xs font-semibold tracking-wide py-2.5 px-3.5 gap-3 transition-colors cursor-pointer ${
+                  isActive
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                    : 'text-emerald-300/85 hover:text-white hover:bg-[#07452d]/60'
+                }`}
+              >
+                <Icon className={`h-4.5 w-4.5 shrink-0 ${isActive ? 'text-white' : 'text-emerald-400'}`} />
+                <span className="truncate text-left flex-1">{getTabTranslation(item.name, t)}</span>
+                {item.name === 'Vaccinations' && vaccineAlertsCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] bg-red-500 text-white font-bold">
+                    {vaccineAlertsCount}
+                  </span>
+                )}
+                <ChevronRight className={`h-4 w-4 ml-auto shrink-0 ${isActive ? 'text-white' : 'text-emerald-600'}`} />
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Pinned Bottom User Details Bar - Clean, non-overlapping footer */}
+        <div className="p-3.5 border-t border-[#0d452f] bg-[#021d12] shrink-0 font-mono text-[11px] space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+              <span className="text-white font-sans font-bold text-xs truncate">{username}</span>
+            </div>
+            <span className="text-indigo-400 font-sans text-[10px] font-semibold uppercase bg-indigo-950/80 px-2 py-0.5 rounded-md border border-indigo-500/30 shrink-0">
+              {userRole}
+            </span>
+          </div>
+          <div className="text-emerald-400/70 text-[10px] truncate">{userEmail}</div>
+
+          <button
+            onClick={() => {
+              setMobileMenuOpen(false);
+              handleLogout();
+            }}
+            className="w-full flex items-center justify-center gap-2 py-2 border border-[#0d452f] hover:border-rose-900/60 text-rose-300 hover:text-white bg-rose-950/30 hover:bg-rose-900/50 text-xs font-semibold rounded-xl font-sans transition-colors cursor-pointer"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>{translations[currentLanguage].lockConsole}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 4. Desktop Sticky Sidebar (Visible ONLY on md: and above) */}
+      <aside
+        className={`hidden md:flex flex-col ${
+          sidebarCollapsed ? 'w-20' : 'w-64'
+        } bg-[#032e1d] text-slate-300 border-r border-[#0d452f] shrink-0 select-none font-sans h-screen max-h-screen sticky top-0 transition-all duration-300 z-20`}
+        id="erp-sidebar-console"
+      >
         <div className={`${sidebarCollapsed ? 'p-3.5' : 'p-5'} border-b border-[#0d452f] flex items-center justify-between shrink-0 transition-all duration-300`}>
           <div className="flex items-center gap-2">
             <span className="p-1.5 bg-indigo-600 text-white rounded-lg">
@@ -854,35 +996,21 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
-            {/* Desktop toggle button */}
-            <button
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="hidden md:flex p-1 rounded bg-[#0a3f29] hover:bg-indigo-600 text-white border border-[#0d5337] smooth-hover cursor-pointer"
-              title={sidebarCollapsed ? 'Expand Menu Bar' : 'Shrink Menu Bar'}
-            >
-              {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-            </button>
-
-            {/* Mobile hamburger menu */}
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-1.5 rounded-lg bg-[#0a3f29] text-white border border-[#0d5337] block md:hidden smooth-hover"
-            >
-              {mobileMenuOpen ? <X className="h-4.5 w-4.5" /> : <Menu className="h-4.5 w-4.5" />}
-            </button>
-          </div>
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="p-1 rounded bg-[#0a3f29] hover:bg-indigo-600 text-white border border-[#0d5337] smooth-hover cursor-pointer"
+            title={sidebarCollapsed ? 'Expand Menu Bar' : 'Shrink Menu Bar'}
+          >
+            {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          </button>
         </div>
 
-        {/* Navigator Drawer Menu links */}
-        <nav className={`flex-1 overflow-y-auto p-3 space-y-1.5 max-h-[60vh] md:max-h-none border-b border-[#0d452f]/50 md:border-b-0 ${mobileMenuOpen ? 'block animate-fade-in' : 'hidden md:block'}`} id="sidebar-navigator-block">
+        {/* Navigator Menu links */}
+        <nav className="flex-1 overflow-y-auto p-3 space-y-1.5" id="sidebar-navigator-block">
           {menuItems.map((item) => {
-            if (item.roles && !item.roles.includes(userRole || '')) {
-              return null;
-            }
-            if (!canAccessTab(item.name)) {
-              return null;
-            }
+            if (item.roles && !item.roles.includes(userRole || '')) return null;
+            if (!canAccessTab(item.name)) return null;
+
             const Icon = item.icon;
             const isActive = activeTab === item.name;
             const t = translations[currentLanguage];
@@ -890,11 +1018,8 @@ export default function App() {
             return (
               <button
                 key={item.name}
-                onClick={() => {
-                  setActiveTab(item.name);
-                  setMobileMenuOpen(false);
-                }}
-                className={`w-full flex items-center rounded-xl text-xs font-semibold tracking-wide transition-all duration-200 group relative ${
+                onClick={() => setActiveTab(item.name)}
+                className={`w-full flex items-center rounded-xl text-xs font-semibold tracking-wide transition-all duration-200 group relative cursor-pointer ${
                   sidebarCollapsed ? 'justify-center px-0 py-3' : 'px-3.5 py-2.5 gap-3'
                 } ${
                   isActive
@@ -921,7 +1046,7 @@ export default function App() {
         </nav>
 
         {/* Current logged operator signature badge */}
-        <div className={`p-4 border-t border-[#0d452f]/60 bg-[#021d12]/40 font-mono text-[11px] space-y-2 mt-auto shrink-0 ${sidebarCollapsed ? 'flex flex-col items-center justify-center p-3' : ''} ${mobileMenuOpen ? 'block' : 'hidden md:block'}`}>
+        <div className={`p-4 border-t border-[#0d452f]/60 bg-[#021d12]/40 font-mono text-[11px] space-y-2 mt-auto shrink-0 ${sidebarCollapsed ? 'flex flex-col items-center justify-center p-3' : ''}`}>
           {!sidebarCollapsed ? (
             <>
               <div className="flex items-center gap-2">
@@ -939,7 +1064,7 @@ export default function App() {
 
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center justify-center gap-1.5 py-1.5 border border-[#0d452f] hover:border-rose-900/60 text-emerald-400/80 hover:text-rose-400 hover:bg-rose-950/20 text-[10px] font-semibold rounded-lg font-sans smooth-hover"
+                className="w-full flex items-center justify-center gap-1.5 py-1.5 border border-[#0d452f] hover:border-rose-900/60 text-emerald-400/80 hover:text-rose-400 hover:bg-rose-950/20 text-[10px] font-semibold rounded-lg font-sans smooth-hover cursor-pointer"
                 id="logout-btn"
               >
                 <LogOut className="h-3.5 w-3.5" />
@@ -949,7 +1074,7 @@ export default function App() {
           ) : (
             <button
               onClick={handleLogout}
-              className="p-2 border border-[#0d452f] hover:border-rose-900/60 text-emerald-400 hover:text-rose-400 hover:bg-rose-950/20 rounded-lg smooth-hover"
+              className="p-2 border border-[#0d452f] hover:border-rose-900/60 text-emerald-400 hover:text-rose-400 hover:bg-rose-950/20 rounded-lg smooth-hover cursor-pointer"
               id="logout-btn"
               title={translations[currentLanguage].lockConsole}
             >
