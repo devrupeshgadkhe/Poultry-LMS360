@@ -168,14 +168,31 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   const handleSubmitTx = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
-    if (!categoryId) return alert('Please select account category code');
+    if (!categoryId) return alert('Please select an account category');
+
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return alert('Transaction amount must be a positive number greater than 0.');
+    }
+
+    if (new Date(txDate) > new Date()) {
+      return alert('Transaction date cannot be set in the future.');
+    }
+
+    if (paymentMethod === 'Cash' && type === 'Expense' && numAmount > cashBalance && cashBalance >= 0) {
+      const proceed = confirm(`Warning: Cash expense (₹${numAmount.toLocaleString()}) exceeds current cash-in-hand (₹${cashBalance.toLocaleString()}). Do you still want to proceed with recording this cash voucher?`);
+      if (!proceed) return;
+    }
+
+    const cleanAmount = Math.round(numAmount * 100) / 100;
+
     try {
       setIsSubmitting(true);
       await financeService.createTransaction(farmId, {
         Date: txDate,
         Type: type,
         CategoryId: parseInt(categoryId),
-        Amount: amount,
+        Amount: cleanAmount,
         PaymentMethod: paymentMethod,
         Reference: reference,
         Notes: description,
@@ -203,13 +220,24 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
     if (!categoryId) return alert('Select Category');
     if (!editingTxId) return;
 
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return alert('Transaction amount must be a positive number greater than 0.');
+    }
+
+    if (new Date(txDate) > new Date()) {
+      return alert('Transaction date cannot be set in the future.');
+    }
+
+    const cleanAmount = Math.round(numAmount * 100) / 100;
+
     try {
       setIsSubmitting(true);
       await financeService.updateTransaction(farmId, editingTxId, {
         Date: txDate,
         Type: type,
         CategoryId: parseInt(categoryId),
-        Amount: amount,
+        Amount: cleanAmount,
         PaymentMethod: paymentMethod,
         Reference: reference,
         Notes: description,

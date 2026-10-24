@@ -47,9 +47,9 @@ function checkWindowsAutoUpdate() {
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: 'Poultry LMS 360 Update',
-              message: `नवीन आवृत्ती उपलब्ध आहे (${release.tag_name})!`,
-              detail: 'सिस्टम आपोआप नवीन अपडेट डाऊनलोड करून इन्स्टॉल करेल.',
-              buttons: ['समजले (OK)']
+              message: `New version available (${release.tag_name})!`,
+              detail: 'Poultry LMS 360 will automatically download and prepare the update.',
+              buttons: ['OK']
             });
 
             const tempExePath = path.join(os.tmpdir(), `Poultry-LMS-360-Setup-${release.tag_name}.exe`);
@@ -67,9 +67,9 @@ function checkWindowsAutoUpdate() {
 
                   dialog.showMessageBox(mainWindow, {
                     type: 'question',
-                    title: 'अपडेट तयार आहे!',
-                    message: 'नवीन अपडेट डाऊनलोड झाले आहे. आता इन्स्टॉल करायचे का?',
-                    buttons: ['आता इन्स्टॉल करा (Install & Restart)', 'नंतर करा (Later)'],
+                    title: 'Update Ready to Install',
+                    message: 'The new update has been downloaded. Would you like to install and restart now?',
+                    buttons: ['Install & Restart Now', 'Later'],
                     defaultId: 0
                   }).then(({ response }) => {
                     if (response === 0) {

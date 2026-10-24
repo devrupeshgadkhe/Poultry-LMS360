@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, RefreshCw, AlertCircle, CheckCircle2, ShieldCheck, X, Sparkles, Smartphone, Monitor } from 'lucide-react';
+import { Download, RefreshCw, AlertCircle, CheckCircle2, ShieldCheck, X, ArrowUpCircle, Smartphone, Monitor } from 'lucide-react';
 
 interface ReleaseInfo {
   tagName: string;
@@ -25,7 +25,7 @@ export const AppUpdateChecker: React.FC = () => {
   const [isAndroidDevice, setIsAndroidDevice] = useState<boolean>(false);
 
   useEffect(() => {
-    // Detect if running on Android or mobile
+    // Detect if running on Android or mobile device
     const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera || '';
     const isAndroid = /android/i.test(userAgent);
     setIsAndroidDevice(isAndroid);
@@ -96,7 +96,7 @@ export const AppUpdateChecker: React.FC = () => {
 
   const handleUpdateClick = () => {
     if (isAndroidDevice) {
-      // Show permission explanation before downloading APK
+      // Show permission explanation before downloading APK on mobile
       setShowPermissionModal(true);
     } else {
       // Directly download or trigger update
@@ -138,7 +138,7 @@ export const AppUpdateChecker: React.FC = () => {
       setIsDownloading(false);
       setShowModal(false);
 
-      // Open download link
+      // Trigger file download
       window.location.href = downloadUrl;
     }, 1200);
   };
@@ -154,19 +154,19 @@ export const AppUpdateChecker: React.FC = () => {
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 flex-1 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center shrink-0 shadow-inner">
-              <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
+              <ArrowUpCircle className="w-5 h-5 text-amber-300 animate-pulse" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold uppercase tracking-wider bg-amber-400/90 text-slate-900 px-2 py-0.5 rounded-full">
-                  नवीन अपडेट
+                  Update Available
                 </span>
                 <span className="text-xs text-teal-100 font-mono">
                   {latestRelease.tagName}
                 </span>
               </div>
               <p className="text-sm font-medium text-white truncate mt-0.5">
-                नवीन सुधारणा व फीचर्स उपलब्ध आहेत!
+                New features, performance enhancements, and fixes are ready to install.
               </p>
             </div>
           </div>
@@ -177,12 +177,12 @@ export const AppUpdateChecker: React.FC = () => {
               className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold text-xs md:text-sm px-3.5 py-1.5 rounded-xl shadow-md transition-all flex items-center gap-1.5 active:scale-95"
             >
               <Download className="w-4 h-4" />
-              <span>अपडेट करा</span>
+              <span>Update Now</span>
             </button>
             <button
               onClick={() => setIsDismissed(true)}
               className="p-1.5 text-teal-200 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
-              title="रद्द करा"
+              title="Dismiss"
             >
               <X className="w-4 h-4" />
             </button>
@@ -208,9 +208,9 @@ export const AppUpdateChecker: React.FC = () => {
                     Poultry LMS 360 Update
                   </h3>
                   <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
-                    <span>सध्याची आवृत्ती: <strong className="text-slate-300 font-mono">{CURRENT_APP_VERSION}</strong></span>
+                    <span>Current Version: <strong className="text-slate-300 font-mono">{CURRENT_APP_VERSION}</strong></span>
                     <span>•</span>
-                    <span>नवीन आवृत्ती: <strong className="text-emerald-400 font-mono">{latestRelease.tagName}</strong></span>
+                    <span>Latest Version: <strong className="text-emerald-400 font-mono">{latestRelease.tagName}</strong></span>
                   </div>
                 </div>
               </div>
@@ -226,21 +226,21 @@ export const AppUpdateChecker: React.FC = () => {
             <div className="mt-5 bg-slate-800/80 rounded-2xl p-4 border border-slate-700/60 max-h-48 overflow-y-auto text-xs text-slate-300 leading-relaxed font-sans whitespace-pre-line">
               <h4 className="font-semibold text-slate-200 mb-2 flex items-center gap-1.5 text-xs">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                नवीन आवृत्तीमधील महत्त्वाच्या सुधारणा:
+                Release Highlights:
               </h4>
-              {latestRelease.body || `• ऑटो-अपडेट आणि परफॉर्मन्स सुधारणा\n• क्लाउड डेटाबेस रिअल-टाइम सिंक वाढवले\n• रिपोर्टिंग आणि ग्राफिक्स गती वाढवली`}
+              {latestRelease.body || `• Automated multi-platform update support\n• Enhanced cloud database real-time sync\n• Performance optimizations and report export improvements`}
             </div>
 
             {/* Target platform badges */}
             <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
               {latestRelease.apkDownloadUrl && (
                 <span className="flex items-center gap-1 px-2.5 py-1 bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 rounded-lg">
-                  <Smartphone className="w-3.5 h-3.5" /> Android APK उपलब्ध
+                  <Smartphone className="w-3.5 h-3.5" /> Android APK Available
                 </span>
               )}
               {latestRelease.exeDownloadUrl && (
                 <span className="flex items-center gap-1 px-2.5 py-1 bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 rounded-lg">
-                  <Monitor className="w-3.5 h-3.5" /> Windows .EXE उपलब्ध
+                  <Monitor className="w-3.5 h-3.5" /> Windows .EXE Available
                 </span>
               )}
             </div>
@@ -249,7 +249,7 @@ export const AppUpdateChecker: React.FC = () => {
             {isDownloading && (
               <div className="mt-4">
                 <div className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>डाऊनलोड सुरू आहे...</span>
+                  <span>Downloading package...</span>
                   <span>{downloadProgress}%</span>
                 </div>
                 <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
@@ -268,7 +268,7 @@ export const AppUpdateChecker: React.FC = () => {
                 onClick={() => setShowModal(false)}
                 className="flex-1 py-2.5 px-4 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 text-sm font-medium transition-colors"
               >
-                नंतर आठवण करा
+                Remind Later
               </button>
               <button
                 type="button"
@@ -279,12 +279,12 @@ export const AppUpdateChecker: React.FC = () => {
                 {isDownloading ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>डाऊनलोड होत आहे...</span>
+                    <span>Downloading...</span>
                   </>
                 ) : (
                   <>
                     <Download className="w-4 h-4" />
-                    <span>{isAndroidDevice ? 'APK डाऊनलोड करा' : 'अपडेट डाऊनलोड करा'}</span>
+                    <span>{isAndroidDevice ? 'Download APK' : 'Download Update'}</span>
                   </>
                 )}
               </button>
@@ -302,34 +302,34 @@ export const AppUpdateChecker: React.FC = () => {
             </div>
 
             <h3 className="text-lg font-bold text-white">
-              डिव्हाइस परवानग्या आवश्यक (Device Permissions)
+              Device Permissions Required
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              नवीन APK अपडेट सुरक्षितपणे सेव्ह करून इन्स्टॉल करण्यासाठी खालील परवानग्या आवश्यक आहेत:
+              The following device permissions are required to download, store, and install this update:
             </p>
 
             <div className="mt-4 space-y-2.5">
               <div className="flex items-start gap-3 p-3 rounded-xl bg-slate-800/60 border border-slate-700/60">
                 <Download className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-xs">
-                  <strong className="text-slate-200 block">स्टोरेज ॲक्सेस (Storage Permission)</strong>
-                  <span className="text-slate-400">नवीन APK फाईल डाऊनलोड फोल्डरमध्ये सुरक्षितपणे सेव्ह करण्यासाठी.</span>
+                  <strong className="text-slate-200 block">Storage Access</strong>
+                  <span className="text-slate-400">Allows saving the updated installation package into your device downloads.</span>
                 </div>
               </div>
 
               <div className="flex items-start gap-3 p-3 rounded-xl bg-slate-800/60 border border-slate-700/60">
                 <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0 mt-0.5" />
                 <div className="text-xs">
-                  <strong className="text-slate-200 block">ॲप इन्स्टॉलेशन (Install Permission)</strong>
-                  <span className="text-slate-400">नवीन व्हर्जन डाऊनलोड झाल्यावर थेट ॲप अपडेट करण्याची परवानगी.</span>
+                  <strong className="text-slate-200 block">Package Installation</strong>
+                  <span className="text-slate-400">Enables triggering the update installer directly upon download completion.</span>
                 </div>
               </div>
 
               <div className="flex items-start gap-3 p-3 rounded-xl bg-slate-800/60 border border-slate-700/60">
                 <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                 <div className="text-xs">
-                  <strong className="text-slate-200 block">नोटिफिकेशन्स (Notification Permission)</strong>
-                  <span className="text-slate-400">अपडेट डाऊनलोडची प्रगती आणि यश संदेश मिळवण्यासाठी.</span>
+                  <strong className="text-slate-200 block">Notifications</strong>
+                  <span className="text-slate-400">Shows real-time download progress and installation alerts.</span>
                 </div>
               </div>
             </div>
@@ -340,7 +340,7 @@ export const AppUpdateChecker: React.FC = () => {
                 onClick={() => setShowPermissionModal(false)}
                 className="flex-1 py-2.5 px-4 rounded-xl border border-slate-700 text-slate-400 hover:text-white text-xs font-medium"
               >
-                रद्द करा
+                Cancel
               </button>
               <button
                 type="button"
@@ -348,7 +348,7 @@ export const AppUpdateChecker: React.FC = () => {
                 className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 text-slate-950 font-bold text-xs shadow-lg shadow-teal-500/20 flex items-center justify-center gap-1.5"
               >
                 <Download className="w-4 h-4" />
-                <span>परवानगी द्या व डाऊनलोड करा</span>
+                <span>Grant & Download</span>
               </button>
             </div>
           </div>

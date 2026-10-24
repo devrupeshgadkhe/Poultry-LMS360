@@ -146,9 +146,9 @@ public class MainActivity extends AppCompatActivity {
 
             if (url.endsWith(".apk") || (mimeType != null && mimeType.contains("vnd.android.package-archive"))) {
                 if (!filename.endsWith(".apk")) filename = "Poultry-LMS-360-update.apk";
-                Toast.makeText(this, "नवीन अपडेट डाऊनलोड होत आहे... (Downloading Update)", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Downloading Poultry LMS 360 Update...", Toast.LENGTH_LONG).show();
             } else {
-                Toast.makeText(this, "डाऊनलोड सुरू झाले: " + filename, Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Download started: " + filename, Toast.LENGTH_SHORT).show();
             }
 
             request.setMimeType(mimeType);
@@ -169,7 +169,7 @@ public class MainActivity extends AppCompatActivity {
                 Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                 startActivity(i);
             } catch (Exception ex) {
-                Toast.makeText(this, "डाऊनलोड अयशस्वी: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "Download failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -232,14 +232,14 @@ public class MainActivity extends AppCompatActivity {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!getPackageManager().canRequestPackageInstalls()) {
                     new AlertDialog.Builder(this)
-                            .setTitle("ॲप अपडेट परवानगी (Install Permission)")
-                            .setMessage("नवीन व्हर्जन इन्स्टॉल करण्यासाठी 'Install unknown apps' परवानगी आवश्यक आहे. कृपया ती ऑन करा.")
-                            .setPositiveButton("सेटिंग्ज उघडा", (d, w) -> {
+                            .setTitle("Install Permission Required")
+                            .setMessage("To install the new update, please enable 'Install unknown apps' permission in Android Settings.")
+                            .setPositiveButton("Open Settings", (d, w) -> {
                                 Intent reqIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
                                 reqIntent.setData(Uri.parse("package:" + getPackageName()));
                                 startActivity(reqIntent);
                             })
-                            .setNegativeButton("रद्द करा", null)
+                            .setNegativeButton("Cancel", null)
                             .show();
                     return;
                 }
@@ -247,7 +247,7 @@ public class MainActivity extends AppCompatActivity {
 
             startActivity(intent);
         } catch (Exception e) {
-            Toast.makeText(this, "अपडेट इन्स्टॉल करण्यात त्रुटी: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Error installing update: " + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 

@@ -27,7 +27,6 @@ import {
   Eye,
   EyeOff,
   CheckCircle2,
-  Sparkles,
   Layers,
   History
 } from 'lucide-react';
@@ -684,7 +683,7 @@ export default function App() {
             {/* Top Pill */}
             <div className="relative z-10 flex items-center justify-between">
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/20 backdrop-blur-md text-white text-xs font-semibold border border-white/25 shadow-xs">
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                <Shield className="w-3.5 h-3.5 text-emerald-300" />
                 Layer Farm Operations
               </span>
               <span className="text-xs text-white/90 font-medium tracking-wide">Poultry LMS 360</span>

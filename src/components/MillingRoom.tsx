@@ -8,7 +8,7 @@ import {
   CircleAlert,
   AlertTriangle,
   History,
-  Sparkles,
+  PlusCircle,
   ArrowRight,
   Package,
   Layers,
@@ -286,10 +286,10 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
       return match ? String(match.Id) : '';
     };
 
-    const maizeId = findInvId('maize') || findInvId('corn') || findInvId('मका') || '';
-    const soyaId = findInvId('soya') || findInvId('doc') || findInvId('सोया') || '';
-    const dorbId = findInvId('dorb') || findInvId('bran') || findInvId('कोंडा') || '';
-    const mineralId = findInvId('premix') || findInvId('mineral') || findInvId('मिनरल') || '';
+    const maizeId = findInvId('maize') || findInvId('corn') || '';
+    const soyaId = findInvId('soya') || findInvId('doc') || '';
+    const dorbId = findInvId('dorb') || findInvId('bran') || '';
+    const mineralId = findInvId('premix') || findInvId('mineral') || '';
     const shellGritId = findInvId('grit') || findInvId('shell') || findInvId('calcium') || '';
 
     if (type === 'layer') {
@@ -522,7 +522,7 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
                   <Layers className="h-12 w-12 text-slate-300 mx-auto" />
                   <div className="space-y-1">
                     <h3 className="text-base font-bold text-slate-800">{mt.noRecipesYet}</h3>
-                    <p className="text-xs text-slate-500">To produce feed, select an existing formula or create a recipe below टेम्पलेट वापरा.</p>
+                    <p className="text-xs text-slate-500">To produce feed, select an existing formula or create a recipe below using templates.</p>
                   </div>
                   <button
                     onClick={() => { setActiveTab('recipes'); setShowAddForm(true); }}
@@ -818,7 +818,7 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
                 >
                   <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                     <h3 className="text-base font-bold font-display text-slate-900 flex items-center gap-2">
-                      <Sparkles className="h-5 w-5 text-amber-500" />
+                      <PlusCircle className="h-5 w-5 text-teal-600" />
                       Create New Feed Recipe
                     </h3>
                     <span className="text-xs text-slate-500 font-mono">Farm #{farmId}</span>

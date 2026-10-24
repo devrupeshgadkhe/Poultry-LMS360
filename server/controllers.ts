@@ -2820,7 +2820,7 @@ export const recipeControllers = {
           const originalInv = await query.get('SELECT * FROM Inventories WHERE Id = ?', [ing.InventoryId]);
           
           if (!originalInv || (originalInv.CurrentStock || 0) < requiredWeight) {
-            throw new Error(`कच्चा माल अपुरा आहे: "${originalInv?.ItemName || 'Ingredient'}" - आवश्यक: ${requiredWeight.toFixed(1)} Kg, शिल्लक: ${originalInv?.CurrentStock || 0} Kg`);
+            throw new Error(`Insufficient raw material: "${originalInv?.ItemName || 'Ingredient'}" - Required: ${requiredWeight.toFixed(1)} Kg, Available: ${originalInv?.CurrentStock || 0} Kg`);
           }
 
           const ingredientAvgLanded = originalInv.UnitPrice || (await getAverageLandedCost(ing.InventoryId)) || 0;
@@ -2892,7 +2892,7 @@ export const recipeControllers = {
 
       await logAudit(req, '', 'Milling', 'Compounding Production', { RecipeId: id, QuantityKg: finalWeightKg, farmId }, 'SUCCESS');
       res.json({
-        message: `यशस्वी: ${finalWeightKg} किलो (${(finalWeightKg / 50).toFixed(1)} गोण्या) खाद्य तयार करून गोदामात जमा केले.`,
+        message: `Successfully produced ${finalWeightKg} Kg (${(finalWeightKg / 50).toFixed(1)} Bags) of feed and added to inventory.`,
         summary: productionSummary
       });
     } catch (e: any) {
@@ -3377,6 +3377,15 @@ export const ledgerControllers = {
 
   async createTransaction(req: Request, res: Response) {
     const { Date: tDate, Amount, Type, CategoryId, Notes, CustomerId, SupplierId, StaffId, FlockId, PaymentMethod, Reference } = req.body;
+    const numAmount = Number(Amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ error: 'Transaction amount must be a positive number greater than 0.' });
+    }
+    if (!CategoryId) {
+      return res.status(400).json({ error: 'Transaction category is required.' });
+    }
+    const cleanAmount = Math.round(numAmount * 100) / 100;
+
     try {
       await query.serializeTransaction(async () => {
         // Automatically determine correct Type based on Category config
@@ -3386,18 +3395,18 @@ export const ledgerControllers = {
         await query.run(`
           INSERT INTO FinancialTransactions (Date, Amount, Type, CategoryId, Notes, CustomerId, SupplierId, StaffId, FlockId, PaymentMethod, Reference)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [tDate, Amount, resolvedType, CategoryId, Notes || '', CustomerId || null, SupplierId || null, StaffId || null, FlockId || null, PaymentMethod || 'Cash', Reference || '']);
+        `, [tDate, cleanAmount, resolvedType, CategoryId, Notes || '', CustomerId || null, SupplierId || null, StaffId || null, FlockId || null, PaymentMethod || 'Cash', Reference || '']);
 
         // Directly balance the running credit outstanding profiles
         if (CustomerId && resolvedType === 'Income') {
-          await query.run('UPDATE Customers SET CurrentCreditBalance = MAX(0, CurrentCreditBalance - ?) WHERE Id = ?', [Amount, CustomerId]);
+          await query.run('UPDATE Customers SET CurrentCreditBalance = MAX(0, CurrentCreditBalance - ?) WHERE Id = ?', [cleanAmount, CustomerId]);
         }
         if (SupplierId && resolvedType === 'Expense') {
-          await query.run('UPDATE Suppliers SET CurrentCreditBalance = MAX(0, CurrentCreditBalance - ?) WHERE Id = ?', [Amount, SupplierId]);
+          await query.run('UPDATE Suppliers SET CurrentCreditBalance = MAX(0, CurrentCreditBalance - ?) WHERE Id = ?', [cleanAmount, SupplierId]);
         }
       });
 
-      await logAudit(req, '', 'Finance', 'Manual Ledger Outlay', { Amount, Type }, 'SUCCESS');
+      await logAudit(req, '', 'Finance', 'Manual Ledger Outlay', { Amount: cleanAmount, Type }, 'SUCCESS');
       res.json({ message: 'Transaction registered and debtor outstanding accounts balanced.' });
     } catch (e: any) {
       console.error('SERVER ERROR [createTransaction]:', e);
@@ -3408,6 +3417,12 @@ export const ledgerControllers = {
   async updateTransaction(req: Request, res: Response) {
     const { id } = req.params;
     const { Date: tDate, Amount, Type, CategoryId, Notes, CustomerId, SupplierId, StaffId, FlockId, PaymentMethod, Reference } = req.body;
+    const numAmount = Number(Amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ error: 'Transaction amount must be a positive number greater than 0.' });
+    }
+    const cleanAmount = Math.round(numAmount * 100) / 100;
+
     try {
       await query.serializeTransaction(async () => {
         const oldTx = await query.get('SELECT * FROM FinancialTransactions WHERE Id = ?', [id]);
@@ -3430,14 +3445,14 @@ export const ledgerControllers = {
           UPDATE FinancialTransactions
           SET Date = ?, Amount = ?, Type = ?, CategoryId = ?, Notes = ?, CustomerId = ?, SupplierId = ?, StaffId = ?, FlockId = ?, PaymentMethod = ?, Reference = ?
           WHERE Id = ?
-        `, [tDate, Amount, resolvedType, CategoryId, Notes || '', CustomerId || null, SupplierId || null, StaffId || null, FlockId || null, PaymentMethod || 'Cash', Reference || '', id]);
+        `, [tDate, cleanAmount, resolvedType, CategoryId, Notes || '', CustomerId || null, SupplierId || null, StaffId || null, FlockId || null, PaymentMethod || 'Cash', Reference || '', id]);
 
         // Apply new credits
         if (CustomerId && resolvedType === 'Income') {
-          await query.run('UPDATE Customers SET CurrentCreditBalance = MAX(0, CurrentCreditBalance - ?) WHERE Id = ?', [Amount, CustomerId]);
+          await query.run('UPDATE Customers SET CurrentCreditBalance = MAX(0, CurrentCreditBalance - ?) WHERE Id = ?', [cleanAmount, CustomerId]);
         }
         if (SupplierId && resolvedType === 'Expense') {
-          await query.run('UPDATE Suppliers SET CurrentCreditBalance = MAX(0, CurrentCreditBalance - ?) WHERE Id = ?', [Amount, SupplierId]);
+          await query.run('UPDATE Suppliers SET CurrentCreditBalance = MAX(0, CurrentCreditBalance - ?) WHERE Id = ?', [cleanAmount, SupplierId]);
         }
       });
 
