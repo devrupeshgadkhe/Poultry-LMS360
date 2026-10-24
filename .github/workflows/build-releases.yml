@@ -1,0 +1,142 @@
+name: Build Multi-Platform Releases (.exe & .apk)
+
+on:
+  push:
+    branches: [ master, main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================
+  # 1. Windows Desktop Installer (.exe) Build
+  # ==========================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install --include=optional
+
+      - name: Build App & Pack Windows Installer (.exe)
+        run: npm run electron:pack
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rename & Stage Windows Setup (.exe)
+        shell: bash
+        run: |
+          mkdir -p release-assets/windows
+          cp dist-desktop/*.exe release-assets/windows/Poultry-LMS-360-Setup.exe || cp dist-desktop/*.exe release-assets/windows/
+
+      - name: Upload Windows Setup Artifact (.exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-setup
+          path: release-assets/windows/*.exe
+
+  # ==========================================
+  # 2. Android Mobile Application (.apk) Build
+  # ==========================================
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Node Dependencies
+        run: npm install --include=optional
+
+      - name: Build Web Application
+        run: npm run build
+
+      - name: Bundle Web Assets into Android App
+        run: |
+          mkdir -p android/app/src/main/assets/public
+          cp -r dist/* android/app/src/main/assets/public/
+
+      - name: Build Android APK via Gradle
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease || ./gradlew assembleDebug
+
+      - name: Stage APK Output
+        run: |
+          mkdir -p release-assets/android
+          find android/app/build/outputs/apk -name "*.apk" -exec cp {} release-assets/android/Poultry-LMS-360.apk \;
+
+      - name: Upload Android APK Artifact (.apk)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: release-assets/android/*.apk
+
+  # ==========================================
+  # 3. Publish Unified GitHub Release
+  # ==========================================
+  publish-release:
+    needs: [build-windows, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows Setup Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-setup
+          path: final-release/
+
+      - name: Download Android APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: final-release/
+
+      - name: List Release Files
+        run: |
+          echo "Release Assets Ready for Publishing:"
+          ls -la final-release/
+
+      - name: Publish GitHub Release with .exe & .apk
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            final-release/*.exe
+            final-release/*.apk
+          tag_name: v1.0.${{ github.run_number }}
+          name: "Poultry LMS 360 v1.0.${{ github.run_number }} (Windows .EXE & Android .APK)"
+          body: |
+            ### 🐔 Poultry LMS 360 - Official Multi-Platform Release
+
+            Both Windows Desktop Installer and Android Mobile APK are compiled and attached below:
+
+            - 💻 **Windows Desktop:** `Poultry-LMS-360-Setup.exe` (with automatic background updates & custom icon)
+            - 📱 **Android Mobile:** `Poultry-LMS-360.apk` (with in-app update button & device permissions prompt)
+            - ☁️ **Cloud Database:** Real-time synchronization with Supabase Cloud
+          draft: false
+          prerelease: false
+          overwrite: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
