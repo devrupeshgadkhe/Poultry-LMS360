@@ -66,7 +66,7 @@ public class MainActivity extends AppCompatActivity {
         registerApkInstallReceiver();
 
         // Load application
-        webView.loadURL(APP_URL);
+        webView.loadUrl(APP_URL);
     }
 
     private void setupWebView() {
