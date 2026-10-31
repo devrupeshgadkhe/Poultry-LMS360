@@ -5,6 +5,13 @@ const fs = require('fs');
 
 process.env.NODE_ENV = process.env.NODE_ENV || 'production';
 
+try {
+  const WebSocket = require('ws');
+  if (typeof globalThis.WebSocket === 'undefined') {
+    globalThis.WebSocket = WebSocket;
+  }
+} catch (e) {}
+
 // Global uncaught handler to catch asynchronous startup errors
 process.on('uncaughtException', (err) => {
   const errorMsg = err && err.stack ? err.stack : String(err);

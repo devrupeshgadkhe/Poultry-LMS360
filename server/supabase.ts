@@ -1,11 +1,25 @@
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
+import WebSocket from 'ws';
 import { query } from './db.js';
+
+// Polyfill native WebSocket for Node.js 20 / Electron environments
+if (typeof (globalThis as any).WebSocket === 'undefined') {
+  (globalThis as any).WebSocket = WebSocket;
+}
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://vrujjlytlbjezesupoxq.supabase.co';
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_y7TO_O4yXG54m-czqOkvNQ_KlqyVaBN';
 
-export const supabaseServer = createClient(supabaseUrl, supabaseAnonKey);
+export const supabaseServer = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+  realtime: {
+    transport: WebSocket as any
+  }
+});
 
 /**
  * Fetch all farms from Supabase

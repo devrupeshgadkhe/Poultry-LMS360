@@ -34,3 +34,4 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
   - Removed static `sqlite3` import in `server/migrationControllers.ts` to prevent Node/Electron ABI mismatch crashes.
   - Bound server listener to `127.0.0.1` and updated `main.cjs` to target `127.0.0.1:3000` directly, eliminating IPv6 DNS resolution issues and Windows Defender Firewall blocks.
   - Implemented safe EADDRINUSE handling and `did-fail-load` automatic recovery for smooth startup.
+  - Resolved "Node.js detected but native WebSocket not found" boot error by installing `ws` package, polyfilling `globalThis.WebSocket`, and providing the realtime transport option to Supabase client initialization.

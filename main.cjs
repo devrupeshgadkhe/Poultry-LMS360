@@ -7,6 +7,15 @@ const os = require('os');
 const { exec } = require('child_process');
 
 try {
+  const WebSocket = require('ws');
+  if (typeof globalThis.WebSocket === 'undefined') {
+    globalThis.WebSocket = WebSocket;
+  }
+} catch (e) {
+  // ws polyfill fallback
+}
+
+try {
   require('bytenode');
 } catch (e) {
   // bytenode is optional for bytecode runtime
