@@ -4,6 +4,7 @@ import { logAudit } from './controllers.js';
 import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { 
   supabaseServer,
   getSupabaseUsers, 
@@ -279,7 +280,13 @@ export const settingsControllers = {
         let ext = '.png';
         if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') ext = '.jpg';
         else if (mimeType === 'image/svg+xml') ext = '.svg';
-        const dirPath = path.join(process.cwd(), 'uploads', 'farm');
+        let baseDir = process.cwd();
+        try {
+          fs.accessSync(baseDir, fs.constants.W_OK);
+        } catch {
+          baseDir = process.env.APPDATA ? path.join(process.env.APPDATA, 'Poultry LMS 360') : os.tmpdir();
+        }
+        const dirPath = path.join(baseDir, 'uploads', 'farm');
         if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
         const fileName = `farm_${farmId}_logo${ext}`;
         fs.writeFileSync(path.join(dirPath, fileName), buffer);

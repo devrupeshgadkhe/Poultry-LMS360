@@ -76,11 +76,32 @@ export function getEncryptedBackup(backupObj: any): { encrypted: boolean; data: 
 const CLIENT_ID = "599268286154-1n602i9gvsdjkjjiv8aukrum5rp0dp0h.apps.googleusercontent.com";
 const CLIENT_SECRET = "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";
 
-const backupsDir = path.join(path.dirname(dbPath), 'poultry360_backups');
+function resolveBackupsDir(): string {
+  if (process.env.BACKUP_DIR) {
+    return process.env.BACKUP_DIR;
+  }
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'Poultry LMS 360', 'poultry360_backups');
+  }
+  return path.join(os.homedir(), '.poultry360', 'poultry360_backups');
+}
 
-// Ensure backups directory exists
-if (!fs.existsSync(backupsDir)) {
-  fs.mkdirSync(backupsDir, { recursive: true });
+export const backupsDir = resolveBackupsDir();
+
+// Ensure backups directory exists safely without throwing unhandled exceptions
+try {
+  if (!fs.existsSync(backupsDir)) {
+    fs.mkdirSync(backupsDir, { recursive: true });
+  }
+} catch (err: any) {
+  console.warn('[Backups] Could not create primary backups directory, using temp fallback:', err.message);
+  try {
+    const fallbackDir = path.join(os.tmpdir(), 'poultry360_backups');
+    if (!fs.existsSync(fallbackDir)) {
+      fs.mkdirSync(fallbackDir, { recursive: true });
+    }
+  } catch {}
 }
 
 interface TableBackup {

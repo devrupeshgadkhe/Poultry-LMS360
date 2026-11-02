@@ -35,3 +35,4 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
   - Bound server listener to `127.0.0.1` and updated `main.cjs` to target `127.0.0.1:3000` directly, eliminating IPv6 DNS resolution issues and Windows Defender Firewall blocks.
   - Resolved "Node.js detected but native WebSocket not found" boot error by creating an autonomous `SafeWebSocketStub` implementation, polyfilling `globalThis.WebSocket` and `global.WebSocket`, and providing the realtime transport option to Supabase client initialization.
   - Wrapped `AuditLogs` local query execution in safe try-catch blocks to prevent unhandled database exceptions during audit tracking.
+  - Resolved "EPERM: operation not permitted, mkdir poultry360_backups" boot crash on Windows by moving the backups directory from read-only `C:\Program Files` to the user's writable `%APPDATA%\Poultry LMS 360\poultry360_backups` with safe try-catch fallbacks.

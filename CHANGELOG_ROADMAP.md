@@ -29,5 +29,5 @@
   - Resolved Windows EXE installer errors (`perMachine: false`, `requestedExecutionLevel: "asInvoker"`).
   - Resolved Windows Desktop launch failures by removing static `vite` and `sqlite3` imports, routing through IPv4 `127.0.0.1`, and adding startup error handlers.
   - Fixed Supabase Node.js boot error ("native WebSocket not found") by implementing an autonomous `SafeWebSocketStub` and polyfilling `ws` across Electron main and server processes.
-  - Wrapped AuditLogs query runner in safe try-catch handlers.
+  - Fixed Windows "EPERM mkdir poultry360_backups" crash by relocating backup storage to user writable %APPDATA% directory.
   - Updated architectural context and roadmap tracking files.
