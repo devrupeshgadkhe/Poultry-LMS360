@@ -36,3 +36,8 @@
   - Added real-time bidirectional (vice-versa) Weeks <-> Days auto-conversion inputs in Flock forms.
   - Eliminated UI-blocking native `window.alert()` and `window.confirm()` from Flock management, replacing them with modern styled React modals.
   - Fixed Flock edit and update persistence by strictly whitelisting Supabase table columns and syncing with cloud backend.
+- **v1.0.11**:
+  - Resolved bulk Excel/CSV import flock resolution errors by migrating `server/bulkImportControllers.ts` to pure cloud Supabase data fetching.
+  - Built resilient `findSmartFlockMatch` algorithm recognizing exact, case-insensitive, dash/space normalized, alphanumeric punctuation-free, numeric ID, and prefix variations without hardcoding.
+  - Enhanced date parser (`cleanDate`) supporting international date formats (DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD) and Excel numeric timestamps.
+  - Direct atomic batch commit to Supabase Cloud (`DailyLogs`, `Inventories`, `Purchases`, `Sales`) with automatic flock current count and inventory reconciliation.

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { query } from './db.js';
 import { logAudit, cleanDuplicateEggInventories, reconcileEggInventoryForFarm } from './controllers.js';
-import { syncRecordToSupabase, reconcileAllFlocksInventory } from './supabase.js';
+import { supabaseServer, syncRecordToSupabase, reconcileAllFlocksInventory } from './supabase.js';
 
 // Detect delimiter based on first row
 export function detectDelimiter(text: string): string {
@@ -68,26 +68,172 @@ export function cleanFloat(val: any, defaultVal = 0): number {
   return isNaN(num) ? defaultVal : num;
 }
 
-export function cleanDate(rawDate: string): string {
-  if (!rawDate) return '';
-  const trimmed = String(rawDate).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+export function cleanDate(rawDate: any): string {
+  if (rawDate === undefined || rawDate === null) return '';
+  const str = String(rawDate)
+    .replace(/[\uFEFF\u200B\u200C\u200D\u00A0]/g, '')
+    .trim();
+  if (!str) return '';
+
+  // Strip trailing time portion (e.g. "11-01-2025 00:00:00" or "2025-01-11T00:00:00")
+  const dateOnly = str.split(/[ T]/)[0].trim();
+
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return dateOnly;
+
   // DD/MM/YYYY or DD-MM-YYYY
-  const dmy = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  const dmy = dateOnly.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (dmy) {
     return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
   }
+
   // YYYY/MM/DD
-  const ymd = trimmed.match(/^(\d{4})[\/](\d{1,2})[\/](\d{1,2})$/);
+  const ymd = dateOnly.match(/^(\d{4})[\/](\d{1,2})[\/](\d{1,2})$/);
   if (ymd) {
     return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
   }
-  const parsed = new Date(trimmed);
-  if (!isNaN(parsed.getTime())) {
-    return parsed.toISOString().split('T')[0];
+
+  // MM/DD/YYYY or MM-DD-YYYY fallback
+  const mdy = dateOnly.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (mdy && Number(mdy[1]) <= 12 && Number(mdy[2]) > 12) {
+    const yr = mdy[3].length === 2 ? `20${mdy[3]}` : mdy[3];
+    return `${yr}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`;
   }
-  return trimmed;
+
+  // Excel serial date number (e.g. 45668)
+  if (/^\d{5}$/.test(dateOnly)) {
+    const num = Number(dateOnly);
+    if (num >= 30000 && num <= 60000) {
+      const excelEpoch = new Date(1899, 11, 30);
+      const targetDate = new Date(excelEpoch.getTime() + num * 86400000);
+      if (!isNaN(targetDate.getTime())) {
+        const y = targetDate.getFullYear();
+        const m = String(targetDate.getMonth() + 1).padStart(2, '0');
+        const d = String(targetDate.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+    }
+  }
+
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return dateOnly;
 }
+
+// Normalize flock string by removing invisible unicode, standardizing dashes, collapsing spaces
+export function normalizeFlockStr(s: any): string {
+  if (!s) return '';
+  return String(s)
+    .replace(/[\uFEFF\u200B\u200C\u200D\u00A0]/g, ' ')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, '-')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+// Strip all non-alphanumeric characters for fuzzy batch/flock comparison
+export function cleanAlphanumeric(s: any): string {
+  if (!s) return '';
+  return normalizeFlockStr(s).replace(/[^a-z0-9]/g, '');
+}
+
+export interface FlockCandidate {
+  Id: number;
+  FlockName: string;
+  FarmId: number;
+  Breed?: string;
+  CurrentCount?: number;
+  TotalFeedCost?: number;
+  Status?: string;
+  PerBirdPurchasePrice?: number;
+}
+
+/**
+ * Smart Flock Matcher
+ * Resiliently matches flock names across case, spaces, dashes, prefixes, IDs, and substrings.
+ */
+export function findSmartFlockMatch(
+  rawInput: string,
+  farmFlocks: FlockCandidate[],
+  allFlocks: FlockCandidate[]
+): { flock: FlockCandidate; matchType: string } | null {
+  if (!rawInput) return null;
+  const raw = String(rawInput).trim();
+  const normInput = normalizeFlockStr(raw);
+  const alphaInput = cleanAlphanumeric(raw);
+  if (!alphaInput && !normInput) return null;
+
+  // Search hierarchy: Check current farm first, then expand to all flocks
+  const pools = [
+    { list: farmFlocks || [], scope: 'farm' },
+    { list: allFlocks || [], scope: 'global' }
+  ];
+
+  for (const { list, scope } of pools) {
+    if (!list || list.length === 0) continue;
+
+    // 1. Exact string match
+    const exact = list.find(f => (f.FlockName || '').trim() === raw);
+    if (exact) return { flock: exact, matchType: `exact (${scope})` };
+
+    // 2. Normalized lowercase & dash match
+    const normMatch = list.find(f => normalizeFlockStr(f.FlockName) === normInput);
+    if (normMatch) return { flock: normMatch, matchType: `case-insensitive (${scope})` };
+
+    // 3. Alphanumeric match (ignoring dashes, spaces, underscores, symbols)
+    // E.g. "B5-Batch5" == "B5 - Batch 5" == "b5batch5" == "B5 Batch 5" == "B5_Batch5"
+    if (alphaInput) {
+      const alphaMatch = list.find(f => cleanAlphanumeric(f.FlockName) === alphaInput);
+      if (alphaMatch) return { flock: alphaMatch, matchType: `alphanumeric (${scope})` };
+    }
+
+    // 4. Numeric ID match (e.g. "6", "#6", "Flock #6", "ID: 6")
+    const idMatch = raw.match(/^#?(\d+)$/) || raw.match(/flock\s*#?\s*(\d+)/i);
+    if (idMatch) {
+      const targetId = Number(idMatch[1]);
+      const byId = list.find(f => Number(f.Id) === targetId);
+      if (byId) return { flock: byId, matchType: `id #${targetId} (${scope})` };
+    }
+
+    // 5. Common prefixes stripped ("Flock B5-Batch5", "Batch B5-Batch5", "Shed 1", "House 1")
+    const strippedInput = normInput.replace(/^(flock|batch|shed|house|group)\s*[-:#]?\s*/i, '').trim();
+    const strippedAlpha = cleanAlphanumeric(strippedInput);
+    if (strippedAlpha) {
+      const prefixMatch = list.find(f => {
+        const fStripped = normalizeFlockStr(f.FlockName).replace(/^(flock|batch|shed|house|group)\s*[-:#]?\s*/i, '').trim();
+        return cleanAlphanumeric(fStripped) === strippedAlpha;
+      });
+      if (prefixMatch) return { flock: prefixMatch, matchType: `prefix-normalized (${scope})` };
+    }
+
+    // 6. Substring / Component containment (e.g., input is "B5" or "Batch5", and flock is "B5-Batch5")
+    if (alphaInput.length >= 2) {
+      const containing = list.filter(f => {
+        const fAlpha = cleanAlphanumeric(f.FlockName);
+        if (!fAlpha) return false;
+        return fAlpha.includes(alphaInput) || alphaInput.includes(fAlpha);
+      });
+      if (containing.length === 1) {
+        return { flock: containing[0], matchType: `component-match (${scope})` };
+      }
+    }
+
+    // 7. Breed fallback if unique
+    const byBreed = list.filter(f => f.Breed && normalizeFlockStr(f.Breed) === normInput);
+    if (byBreed.length === 1) {
+      return { flock: byBreed[0], matchType: `breed-match (${scope})` };
+    }
+  }
+
+  return null;
+}
+
 
 // Comprehensive aliases for column headers matching any Excel or user variations
 export const HEADER_KEY_MAP: Record<string, string> = {
@@ -270,43 +416,84 @@ export const bulkImportControllers = {
       };
 
       // To lookup inventories, flocks, suppliers, customers to pre-validate scoped to farm
-      const inventories = await query.all<{ Id: number, ItemName: string, FarmId: number }>(
-        'SELECT Id, ItemName, FarmId FROM Inventories WHERE FarmId = ? OR FarmId IS NULL',
-        [targetFarmId]
-      );
-      const flocks = await query.all<{ Id: number, FlockName: string, FarmId: number, Breed?: string }>(
-        'SELECT Id, FlockName, FarmId, Breed FROM Flocks WHERE FarmId = ? OR FarmId IS NULL',
-        [targetFarmId]
-      );
-      const allFlocks = await query.all<{ Id: number, FlockName: string, FarmId: number, Breed?: string }>('SELECT Id, FlockName, FarmId, Breed FROM Flocks');
-      const suppliers = await query.all<{ Id: number, CompanyName: string, FarmId: number }>(
-        'SELECT Id, CompanyName, FarmId FROM Suppliers WHERE FarmId = ? OR FarmId IS NULL',
-        [targetFarmId]
-      );
-      const customers = await query.all<{ Id: number, FullName: string, FarmId: number }>(
-        'SELECT Id, FullName, FarmId FROM Customers WHERE FarmId = ? OR FarmId IS NULL',
-        [targetFarmId]
-      );
-      const eggInventories = await query.all<{ Id: number, GradeOrType: string, FarmId: number }>(
-        'SELECT Id, GradeOrType, FarmId FROM EggInventories WHERE FarmId = ? OR FarmId IS NULL',
-        [targetFarmId]
-      );
+      let inventories: any[] = [];
+      let flocks: any[] = [];
+      let allFlocks: any[] = [];
+      let suppliers: any[] = [];
+      let customers: any[] = [];
+      let eggInventories: any[] = [];
+      const existingInvs = new Set<string>();
+      const existingPurchasesInvoices = new Set<string>();
+      const existingSalesInvoices = new Set<string>();
+      const dailyLogSet = new Set<string>();
 
-      // Existing core tables for duplicate detection scoped by FarmId
-      const existingInvs = new Set(inventories.map(inv => inv.ItemName.toLowerCase().trim()));
-      
-      const existingPurchasesInvoices = new Set(
-        (await query.all<{ InvoiceNumber: string }>('SELECT InvoiceNumber FROM Purchases WHERE (FarmId = ? OR FarmId IS NULL) AND InvoiceNumber IS NOT NULL AND InvoiceNumber != ""', [targetFarmId]))
-          .map(p => p.InvoiceNumber.toLowerCase().trim())
-      );
+      if (supabaseServer) {
+        try {
+          const [invRes, flkRes, supRes, custRes, eggRes, purchRes, salesRes, logsRes] = await Promise.all([
+            supabaseServer.from('Inventories').select('Id, ItemName, FarmId, Category, CurrentStock, UnitPrice'),
+            supabaseServer.from('Flocks').select('Id, FlockName, FarmId, Breed, CurrentCount, TotalFeedCost, Status, PerBirdPurchasePrice'),
+            supabaseServer.from('Suppliers').select('Id, CompanyName, FarmId'),
+            supabaseServer.from('Customers').select('Id, FullName, FarmId'),
+            supabaseServer.from('EggInventories').select('Id, GradeOrType, FarmId, Quantity'),
+            supabaseServer.from('Purchases').select('InvoiceNumber, FarmId'),
+            supabaseServer.from('Sales').select('InvoiceNumber, FarmId'),
+            supabaseServer.from('DailyLogs').select('FlockId, LogDate, FarmId')
+          ]);
 
-      const existingSalesInvoices = new Set(
-        (await query.all<{ InvoiceNumber: string }>('SELECT InvoiceNumber FROM Sales WHERE (FarmId = ? OR FarmId IS NULL) AND InvoiceNumber IS NOT NULL AND InvoiceNumber != ""', [targetFarmId]))
-          .map(s => s.InvoiceNumber.toLowerCase().trim())
-      );
+          allFlocks = flkRes.data || [];
+          flocks = targetFarmId ? allFlocks.filter((f: any) => f.FarmId === targetFarmId || !f.FarmId) : allFlocks;
+          inventories = invRes.data || [];
+          suppliers = supRes.data || [];
+          customers = custRes.data || [];
+          eggInventories = eggRes.data || [];
 
-      const existingDailyLogs = await query.all<{ FlockId: number, LogDate: string }>('SELECT FlockId, LogDate FROM DailyLogs WHERE FarmId = ? OR FarmId IS NULL', [targetFarmId]);
-      const dailyLogSet = new Set(existingDailyLogs.map(log => `${log.FlockId}_${(log.LogDate || '').split('T')[0]}`));
+          (purchRes.data || []).forEach((p: any) => {
+            if (p.InvoiceNumber && (p.FarmId === targetFarmId || !p.FarmId)) {
+              existingPurchasesInvoices.add(p.InvoiceNumber.toLowerCase().trim());
+            }
+          });
+
+          (salesRes.data || []).forEach((s: any) => {
+            if (s.InvoiceNumber && (s.FarmId === targetFarmId || !s.FarmId)) {
+              existingSalesInvoices.add(s.InvoiceNumber.toLowerCase().trim());
+            }
+          });
+
+          (logsRes.data || []).forEach((l: any) => {
+            if (l.FlockId && l.LogDate) {
+              const cleanD = cleanDate(l.LogDate);
+              dailyLogSet.add(`${l.FlockId}_${cleanD}`);
+            }
+          });
+        } catch (sbErr: any) {
+          console.warn('[bulkImport parse Supabase fetch warning]', sbErr.message);
+        }
+      }
+
+      // Fallback query if Supabase was empty or offline
+      if (allFlocks.length === 0) {
+        try {
+          flocks = await query.all('SELECT Id, FlockName, FarmId, Breed FROM Flocks WHERE FarmId = ? OR FarmId IS NULL', [targetFarmId]);
+          allFlocks = await query.all('SELECT Id, FlockName, FarmId, Breed FROM Flocks');
+        } catch {}
+      }
+      if (inventories.length === 0) {
+        try { inventories = await query.all('SELECT Id, ItemName, FarmId FROM Inventories WHERE FarmId = ? OR FarmId IS NULL', [targetFarmId]); } catch {}
+      }
+      if (suppliers.length === 0) {
+        try { suppliers = await query.all('SELECT Id, CompanyName, FarmId FROM Suppliers WHERE FarmId = ? OR FarmId IS NULL', [targetFarmId]); } catch {}
+      }
+      if (customers.length === 0) {
+        try { customers = await query.all('SELECT Id, FullName, FarmId FROM Customers WHERE FarmId = ? OR FarmId IS NULL', [targetFarmId]); } catch {}
+      }
+      if (eggInventories.length === 0) {
+        try { eggInventories = await query.all('SELECT Id, GradeOrType, FarmId FROM EggInventories WHERE FarmId = ? OR FarmId IS NULL', [targetFarmId]); } catch {}
+      }
+
+      inventories.forEach(inv => {
+        if (inv.ItemName) existingInvs.add(inv.ItemName.toLowerCase().trim());
+      });
+
 
       let hasNonZeroEggs = false;
       let hasNonZeroMortality = false;
@@ -405,47 +592,41 @@ export const bulkImportControllers = {
             status = 'Invalid';
           }
 
-          let matchedFlock = flocks.find(f => (f.FlockName || '').toLowerCase().trim() === flockName.toLowerCase().trim());
-          if (!matchedFlock) {
-            matchedFlock = allFlocks.find(f => (f.FlockName || '').toLowerCase().trim() === flockName.toLowerCase().trim());
-          }
-          if (!matchedFlock && /^\d+$/.test(flockName.trim())) {
-            matchedFlock = flocks.find(f => String(f.Id) === flockName.trim()) || allFlocks.find(f => String(f.Id) === flockName.trim());
-          }
-          if (!matchedFlock) {
-            const byBreed = flocks.filter(f => f.Breed && f.Breed.toLowerCase().trim() === flockName.toLowerCase().trim());
-            if (byBreed.length === 1) {
-              matchedFlock = byBreed[0];
-            }
-          }
-
-          if (!matchedFlock) {
-            errors.push(`Flock name "${flockName}" is not registered in DB`);
+          const matchResult = findSmartFlockMatch(flockName, flocks, allFlocks);
+          if (!matchResult) {
+            const availableNames = (allFlocks || []).map(f => f.FlockName).filter(Boolean);
+            const hint = availableNames.length > 0 ? ` (Available in DB: ${availableNames.join(', ')})` : '';
+            errors.push(`Flock "${flockName}" is not registered in database${hint}`);
             status = 'Invalid';
           } else {
+            const matchedFlock = matchResult.flock;
             record._flockId = matchedFlock.Id;
             record._farmId = matchedFlock.FarmId || targetFarmId;
+            record._matchedFlockName = matchedFlock.FlockName;
+
             const logKey = `${matchedFlock.Id}_${logDate}`;
             if (dailyLogSet.has(logKey)) {
               status = 'Duplicate';
-              details.push(`Daily log for flock "${flockName}" on ${logDate} already exists. It will be skipped.`);
+              details.push(`Daily log for "${matchedFlock.FlockName}" on ${logDate} already exists in DB. Skipping duplicate.`);
             } else {
-              details.push(`Matched Flock "${flockName}" (ID: ${matchedFlock.Id})`);
+              details.push(`Matched Flock: "${matchedFlock.FlockName}" (ID: #${matchedFlock.Id}) [${matchResult.matchType}]`);
             }
           }
 
-          if (feedName) {
-            const matchedFeed = inventories.find(inv => inv.ItemName.toLowerCase().trim() === feedName.toLowerCase().trim());
+          const cleanFeedName = (feedName || '').trim();
+          if (cleanFeedName && cleanFeedName !== '0' && cleanFeedName.toLowerCase() !== 'none' && cleanFeedName !== '-') {
+            const matchedFeed = inventories.find(inv => (inv.ItemName || '').toLowerCase().trim() === cleanFeedName.toLowerCase());
             if (matchedFeed) {
               record._feedItemId = matchedFeed.Id;
-              details.push(`Feed: "${feedName}" (ID: ${matchedFeed.Id})`);
+              details.push(`Feed: "${matchedFeed.ItemName}" (ID: #${matchedFeed.Id})`);
             } else {
               record._feedItemId = null;
-              details.push(`Feed item "${feedName}" will use default feed item`);
+              details.push(`Feed item "${cleanFeedName}" not matched; will use default farm feed`);
             }
           } else {
             record._feedItemId = null;
           }
+
 
           details.push(`🥚 Eggs Collected: ${eggs.toLocaleString()} | 💀 Mortality: ${mortality} | 🌾 Feed: ${feed} kg`);
 
@@ -495,13 +676,13 @@ export const bulkImportControllers = {
             }
 
             if (itemType === 'Flock') {
-              const matchedFlock = flocks.find(f => f.FlockName.toLowerCase().trim() === itemName.toLowerCase().trim());
-              if (!matchedFlock) {
+              const flockMatch = findSmartFlockMatch(itemName, flocks, allFlocks);
+              if (!flockMatch) {
                 errors.push(`Flock name "${itemName}" must be created first to purchase flock items`);
                 status = 'Invalid';
               } else {
-                record._flockId = matchedFlock.Id;
-                details.push(`Matched active flock "${itemName}"`);
+                record._flockId = flockMatch.flock.Id;
+                details.push(`Matched active flock "${flockMatch.flock.FlockName}"`);
               }
             } else {
               const matchedItem = inventories.find(inv => inv.ItemName.toLowerCase().trim() === itemName.toLowerCase().trim());
@@ -561,13 +742,13 @@ export const bulkImportControllers = {
             }
 
             if (itemType === 'Bird') {
-              const matchedFlock = flocks.find(f => f.FlockName.toLowerCase().trim() === itemName.toLowerCase().trim());
-              if (!matchedFlock) {
+              const flockMatch = findSmartFlockMatch(itemName, flocks, allFlocks);
+              if (!flockMatch) {
                 errors.push(`Flock/Bird name "${itemName}" not found in current layer flocks.`);
                 status = 'Invalid';
               } else {
-                record._flockId = matchedFlock.Id;
-                details.push(`Matched Flock: "${itemName}" (Birds remaining: ${matchedFlock.Id})`);
+                record._flockId = flockMatch.flock.Id;
+                details.push(`Matched Flock: "${flockMatch.flock.FlockName}" (ID: #${flockMatch.flock.Id})`);
               }
             } else if (itemType === 'Egg') {
               const matchedEgg = eggInventories.find(e => e.GradeOrType.toLowerCase().trim() === itemName.toLowerCase().trim());
@@ -643,62 +824,84 @@ export const bulkImportControllers = {
       if (type === 'items') {
         for (const pr of validRecords) {
           const rec = pr.record;
-          const name = rec.ItemName;
-          
-          // Re-verify duplicates inside the transaction to avoid race conditions
-          const exists = await query.get('SELECT Id FROM Inventories WHERE ItemName = ? AND (FarmId = ? OR FarmId IS NULL)', [name, targetFarmId]);
-          if (exists) {
-            duplicateSkipCount++;
-            continue;
+          const name = (rec.ItemName || '').trim();
+          if (!name) continue;
+
+          if (supabaseServer) {
+            try {
+              const { data: exists } = await supabaseServer
+                .from('Inventories')
+                .select('Id')
+                .eq('FarmId', targetFarmId)
+                .ilike('ItemName', name)
+                .maybeSingle();
+
+              if (exists) {
+                duplicateSkipCount++;
+                continue;
+              }
+
+              const { data: inserted, error: insErr } = await supabaseServer.from('Inventories').insert([{
+                FarmId: targetFarmId,
+                ItemName: name,
+                Category: rec.Category || 'Other',
+                UnitOfMeasurement: rec.UnitOfMeasurement || 'Pieces',
+                UnitPrice: parseFloat(rec.UnitPrice || '0'),
+                SellingPrice: parseFloat(rec.SellingPrice || '0'),
+                CurrentStock: parseFloat(rec.CurrentStock || '0'),
+                WeightPerUnit: parseFloat(rec.WeightPerUnit || '1'),
+                MinThreshold: parseFloat(rec.MinThreshold || '0'),
+                Notes: rec.Notes || ''
+              }]).select().single();
+
+              if (!insErr && inserted) {
+                saveCount++;
+              }
+            } catch (err: any) {
+              console.error('[BulkImport items commit error]:', err.message);
+            }
           }
-
-          const cat = rec.Category;
-          const uom = rec.UnitOfMeasurement;
-          const unitPrice = parseFloat(rec.UnitPrice || '0');
-          const sellPrice = parseFloat(rec.SellingPrice || '0');
-          const stock = parseFloat(rec.CurrentStock || '0');
-          const weight = parseFloat(rec.WeightPerUnit || '1');
-          const threshold = parseFloat(rec.MinThreshold || '0');
-          const notes = rec.Notes || '';
-
-          const insertRes = await query.run(`
-            INSERT INTO Inventories (FarmId, ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [targetFarmId, name, cat, uom, unitPrice, sellPrice, stock, weight, threshold, notes]);
-          const itemId = insertRes.lastID;
-          saveCount++;
-
-          syncRecordToSupabase('Inventories', {
-            Id: itemId,
-            FarmId: targetFarmId,
-            ItemName: name,
-            Category: cat,
-            UnitOfMeasurement: uom,
-            UnitPrice: unitPrice,
-            SellingPrice: sellPrice,
-            CurrentStock: stock,
-            WeightPerUnit: weight,
-            MinThreshold: threshold,
-            Notes: notes
-          });
         }
 
       } else if (type === 'daily-logs') {
         for (const pr of validRecords) {
           const rec = normalizeRecordKeys(pr.record);
           const logDate = cleanDate(rec.LogDate);
-          const flockId = rec._flockId;
+          const flockId = Number(rec._flockId);
 
-          // Re-verify duplicates
-          const exists = await query.get('SELECT Id FROM DailyLogs WHERE FlockId = ? AND LogDate = ?', [flockId, logDate]);
-          if (exists) {
-            duplicateSkipCount++;
-            continue;
+          if (!flockId || !logDate) continue;
+
+          // 1. Re-verify duplicates in Supabase Cloud
+          if (supabaseServer) {
+            try {
+              const { data: exists } = await supabaseServer
+                .from('DailyLogs')
+                .select('Id')
+                .eq('FlockId', flockId)
+                .eq('LogDate', logDate)
+                .maybeSingle();
+
+              if (exists) {
+                duplicateSkipCount++;
+                continue;
+              }
+            } catch {}
           }
 
-          // Ensure correct FarmId is derived from Flock
-          const flock = await query.get<{ Id: number, FarmId: number, TotalFeedCost: number, CurrentCount: number, Status: string, PerBirdPurchasePrice: number }>('SELECT * FROM Flocks WHERE Id = ?', [flockId]);
-          const rowFarmId = (flock && flock.FarmId) ? flock.FarmId : (rec._farmId || targetFarmId);
+          // 2. Fetch fresh Flock details
+          let flock: any = null;
+          if (supabaseServer) {
+            try {
+              const { data: flk } = await supabaseServer
+                .from('Flocks')
+                .select('Id, FarmId, TotalFeedCost, CurrentCount, Status, PerBirdPurchasePrice')
+                .eq('Id', flockId)
+                .maybeSingle();
+              flock = flk;
+            } catch {}
+          }
+
+          const rowFarmId = (flock && flock.FarmId) ? flock.FarmId : (Number(rec._farmId) || targetFarmId);
 
           const feedConsumed = cleanFloat(rec.FeedConsumedKg || '0');
           const mortality = cleanInt(rec.MortalityCount || '0');
@@ -712,151 +915,164 @@ export const bulkImportControllers = {
           const eggsGiftedValue = cleanFloat(rec.EggsGiftedValue || '0');
           const notes = rec.Notes || '';
 
-          // Look up or fallback/create feed item dynamically
-          let feedItemId = rec._feedItemId || null;
+          // 3. Resolve Feed Item & Pricing
+          let feedItemId = rec._feedItemId ? Number(rec._feedItemId) : null;
           let feedUnitPrice = 30.00;
           let matchedFeedItem: any = null;
 
-          if (feedItemId) {
-            matchedFeedItem = await query.get("SELECT * FROM Inventories WHERE Id = ?", [feedItemId]);
-          } else {
-            const feedNameInput = rec.FeedName || '';
-            if (feedNameInput) {
-              matchedFeedItem = await query.get("SELECT * FROM Inventories WHERE (FarmId = ? OR FarmId IS NULL) AND ItemName = ?", [rowFarmId, feedNameInput]);
-            }
-            if (!matchedFeedItem) {
-              matchedFeedItem = await query.get("SELECT * FROM Inventories WHERE (FarmId = ? OR FarmId IS NULL) AND Category = 'Feed' LIMIT 1", [rowFarmId]);
-            }
-            if (!matchedFeedItem && feedConsumed > 0) {
-              // Auto create Default Feed item
-              const insertFeed = await query.run(`
-                INSERT INTO Inventories (FarmId, ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes)
-                VALUES (?, 'Default Feed', 'Feed', 'Kg', 30.00, 0, 0, 1, 0, 'Auto-created default feed for historical tracking')
-              `, [rowFarmId]);
-              matchedFeedItem = { Id: insertFeed.lastID, FarmId: rowFarmId, ItemName: 'Default Feed', UnitPrice: 30.00, CurrentStock: 0 };
-              syncRecordToSupabase('Inventories', {
-                Id: insertFeed.lastID,
-                FarmId: rowFarmId,
-                ItemName: 'Default Feed',
-                Category: 'Feed',
-                UnitOfMeasurement: 'Kg',
-                UnitPrice: 30.00,
-                SellingPrice: 0,
-                CurrentStock: 0,
-                WeightPerUnit: 1,
-                MinThreshold: 0,
-                Notes: 'Auto-created default feed for historical tracking'
-              });
-            }
-          }
+          if (supabaseServer) {
+            try {
+              if (feedItemId) {
+                const { data: inv } = await supabaseServer.from('Inventories').select('*').eq('Id', feedItemId).maybeSingle();
+                matchedFeedItem = inv;
+              } else {
+                const feedNameInput = (rec.FeedName || '').trim();
+                if (feedNameInput && feedNameInput !== '0' && feedNameInput.toLowerCase() !== 'none' && feedNameInput !== '-') {
+                  const { data: invs } = await supabaseServer.from('Inventories').select('*').eq('FarmId', rowFarmId).ilike('ItemName', feedNameInput);
+                  if (invs && invs.length > 0) matchedFeedItem = invs[0];
+                }
+                if (!matchedFeedItem) {
+                  const { data: invs } = await supabaseServer.from('Inventories').select('*').eq('FarmId', rowFarmId).eq('Category', 'Feed').limit(1);
+                  if (invs && invs.length > 0) matchedFeedItem = invs[0];
+                }
+                if (!matchedFeedItem && feedConsumed > 0) {
+                  const { data: insFeed } = await supabaseServer.from('Inventories').insert([{
+                    FarmId: rowFarmId,
+                    ItemName: 'Default Feed',
+                    Category: 'Feed',
+                    UnitOfMeasurement: 'Kg',
+                    UnitPrice: 30.00,
+                    SellingPrice: 0,
+                    CurrentStock: 0,
+                    WeightPerUnit: 1,
+                    MinThreshold: 0,
+                    Notes: 'Auto-created default feed for historical tracking'
+                  }]).select().single();
+                  matchedFeedItem = insFeed;
+                }
+              }
 
-          if (matchedFeedItem) {
-            feedItemId = matchedFeedItem.Id;
-            feedUnitPrice = matchedFeedItem.UnitPrice || 30.00;
-            if (feedConsumed > 0) {
-              await query.run('UPDATE Inventories SET CurrentStock = CurrentStock - ? WHERE Id = ?', [feedConsumed, feedItemId]);
-              syncRecordToSupabase('Inventories', {
-                Id: feedItemId,
-                FarmId: rowFarmId,
-                CurrentStock: (matchedFeedItem.CurrentStock || 0) - feedConsumed
-              });
+              if (matchedFeedItem) {
+                feedItemId = matchedFeedItem.Id;
+                feedUnitPrice = Number(matchedFeedItem.UnitPrice) || 30.00;
+                if (feedConsumed > 0) {
+                  const currentStock = Number(matchedFeedItem.CurrentStock) || 0;
+                  await supabaseServer.from('Inventories').update({
+                    CurrentStock: currentStock - feedConsumed
+                  }).eq('Id', feedItemId);
+                }
+              }
+            } catch (feedErr: any) {
+              console.warn('[BulkImport feed resolution warning]:', feedErr.message);
             }
           }
 
           const feedCost = feedConsumed * feedUnitPrice;
-          const dailyBirdCost = (flock && flock.PerBirdPurchasePrice) ? flock.PerBirdPurchasePrice : 0;
+          const dailyBirdCost = (flock && flock.PerBirdPurchasePrice) ? Number(flock.PerBirdPurchasePrice) : 0;
 
-          // Insert Daily Log with rowFarmId
-          const logInsertResult = await query.run(`
-            INSERT INTO DailyLogs (
-              FarmId, FlockId, FeedItemId, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, 
-              FeedCost, DailyBirdCost, Notes, DailyAverageWeight, WaterConsumed,
-              BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [
-            rowFarmId, flockId, feedItemId, feedConsumed, mortality, eggs, damagedEggs, logDate, 
-            feedCost, dailyBirdCost, notes, weight, water,
-            birdsEatenBySelf, birdsEatenValue, eggsGifted, eggsGiftedValue
-          ]);
-
-          const logId = logInsertResult.lastID;
-
-          // Sync DailyLog to Supabase
-          syncRecordToSupabase('DailyLogs', {
-            Id: logId,
-            FarmId: rowFarmId,
-            FlockId: flockId,
-            FeedItemId: feedItemId,
-            FeedConsumedKg: feedConsumed,
-            MortalityCount: mortality,
-            EggsCollected: eggs,
-            DamagedEggsCollected: damagedEggs,
-            LogDate: logDate,
-            FeedCost: feedCost,
-            DailyBirdCost: dailyBirdCost,
-            Notes: notes,
-            DailyAverageWeight: weight,
-            WaterConsumed: water,
-            BirdsEatenBySelf: birdsEatenBySelf,
-            BirdsEatenValue: birdsEatenValue,
-            EggsGifted: eggsGifted,
-            EggsGiftedValue: eggsGiftedValue
-          });
-
-          // Update current flock head count live & Total Feed Cost
-          let updatedFeedCost = feedCost;
-          let newCurrentCount = 0;
-          let status = 'Active';
-          if (flock) {
-            updatedFeedCost = (flock.TotalFeedCost || 0) + feedCost;
-            const totalBirdsRemoved = mortality + birdsEatenBySelf;
-            newCurrentCount = Math.max(0, flock.CurrentCount - totalBirdsRemoved);
-            status = newCurrentCount <= 0 ? 'Inactive' : flock.Status;
-
-            await query.run('UPDATE Flocks SET TotalFeedCost = ?, CurrentCount = ?, Status = ? WHERE Id = ?', [updatedFeedCost, newCurrentCount, status, flockId]);
-            syncRecordToSupabase('Flocks', {
-              Id: flockId,
-              FarmId: rowFarmId,
-              CurrentCount: newCurrentCount,
-              TotalFeedCost: updatedFeedCost,
-              Status: status
-            });
-          }
-
-          // Net Fresh Eggs added / removed (collected - gifted. Allow negative stock)
-          const netFreshEggs = eggs - eggsGifted;
-          if (netFreshEggs !== 0) {
-            await query.run(`
-              UPDATE EggInventories 
-              SET Quantity = Quantity + ? 
-              WHERE GradeOrType = 'Fresh Eggs' AND (FarmId = ? OR FarmId IS NULL)
-            `, [netFreshEggs, rowFarmId]);
-            const eggRow = await query.get<{ Id: number, Quantity: number }>("SELECT Id, Quantity FROM EggInventories WHERE GradeOrType = 'Fresh Eggs' AND (FarmId = ? OR FarmId IS NULL) LIMIT 1", [rowFarmId]);
-            if (eggRow) {
-              syncRecordToSupabase('EggInventories', {
-                Id: eggRow.Id,
+          // 4. Insert Daily Log into Supabase Cloud
+          let logId = 0;
+          if (supabaseServer) {
+            try {
+              const { data: insLog, error: insErr } = await supabaseServer.from('DailyLogs').insert([{
                 FarmId: rowFarmId,
-                GradeOrType: 'Fresh Eggs',
-                Quantity: eggRow.Quantity
-              });
+                FlockId: flockId,
+                FeedItemId: feedItemId,
+                FeedConsumedKg: feedConsumed,
+                MortalityCount: mortality,
+                EggsCollected: eggs,
+                DamagedEggsCollected: damagedEggs,
+                LogDate: logDate,
+                FeedCost: feedCost,
+                DailyBirdCost: dailyBirdCost,
+                Notes: notes,
+                DailyAverageWeight: weight,
+                WaterConsumed: water,
+                BirdsEatenBySelf: birdsEatenBySelf,
+                BirdsEatenValue: birdsEatenValue,
+                EggsGifted: eggsGifted,
+                EggsGiftedValue: eggsGiftedValue
+              }]).select('Id').single();
+
+              if (insErr) {
+                console.error('[BulkImport daily-logs commit error]:', insErr.message);
+                continue;
+              }
+              logId = insLog?.Id || 0;
+              saveCount++;
+            } catch (insCatch: any) {
+              console.error('[BulkImport daily-logs insert exception]:', insCatch.message);
+              continue;
             }
           }
 
-          if (damagedEggs > 0) {
-            await query.run(`
-              UPDATE EggInventories 
-              SET Quantity = Quantity + ? 
-              WHERE GradeOrType = 'Damaged/Waste Eggs' AND (FarmId = ? OR FarmId IS NULL)
-            `, [damagedEggs, rowFarmId]);
-            const eggWasteRow = await query.get<{ Id: number, Quantity: number }>("SELECT Id, Quantity FROM EggInventories WHERE GradeOrType = 'Damaged/Waste Eggs' AND (FarmId = ? OR FarmId IS NULL) LIMIT 1", [rowFarmId]);
-            if (eggWasteRow) {
-              syncRecordToSupabase('EggInventories', {
-                Id: eggWasteRow.Id,
-                FarmId: rowFarmId,
-                GradeOrType: 'Damaged/Waste Eggs',
-                Quantity: eggWasteRow.Quantity
-              });
+          // 5. Update Flock Head Count & Feed Costs in Supabase
+          if (flock && supabaseServer) {
+            try {
+              const updatedFeedCost = (Number(flock.TotalFeedCost) || 0) + feedCost;
+              const totalBirdsRemoved = mortality + birdsEatenBySelf;
+              const newCurrentCount = Math.max(0, (Number(flock.CurrentCount) || 0) - totalBirdsRemoved);
+              const status = newCurrentCount <= 0 ? 'Inactive' : flock.Status;
+
+              await supabaseServer.from('Flocks').update({
+                TotalFeedCost: updatedFeedCost,
+                CurrentCount: newCurrentCount,
+                Status: status
+              }).eq('Id', flockId);
+            } catch (flkErr: any) {
+              console.warn('[BulkImport flock update warning]:', flkErr.message);
+            }
+          }
+
+          // 6. Update Egg Inventories in Supabase
+          const netFreshEggs = eggs - eggsGifted;
+          if (netFreshEggs !== 0 && supabaseServer) {
+            try {
+              const { data: eggRows } = await supabaseServer
+                .from('EggInventories')
+                .select('*')
+                .eq('FarmId', rowFarmId)
+                .eq('GradeOrType', 'Fresh Eggs');
+
+              if (eggRows && eggRows.length > 0) {
+                await supabaseServer.from('EggInventories').update({
+                  Quantity: (Number(eggRows[0].Quantity) || 0) + netFreshEggs
+                }).eq('Id', eggRows[0].Id);
+              } else {
+                await supabaseServer.from('EggInventories').insert([{
+                  FarmId: rowFarmId,
+                  GradeOrType: 'Fresh Eggs',
+                  Quantity: netFreshEggs,
+                  UnitCost: 5.0
+                }]);
+              }
+            } catch (eggErr: any) {
+              console.warn('[BulkImport egg inventory warning]:', eggErr.message);
+            }
+          }
+
+          if (damagedEggs > 0 && supabaseServer) {
+            try {
+              const { data: wasteRows } = await supabaseServer
+                .from('EggInventories')
+                .select('*')
+                .eq('FarmId', rowFarmId)
+                .eq('GradeOrType', 'Damaged/Waste Eggs');
+
+              if (wasteRows && wasteRows.length > 0) {
+                await supabaseServer.from('EggInventories').update({
+                  Quantity: (Number(wasteRows[0].Quantity) || 0) + damagedEggs
+                }).eq('Id', wasteRows[0].Id);
+              } else {
+                await supabaseServer.from('EggInventories').insert([{
+                  FarmId: rowFarmId,
+                  GradeOrType: 'Damaged/Waste Eggs',
+                  Quantity: damagedEggs,
+                  UnitCost: 0
+                }]);
+              }
+            } catch (wasteErr: any) {
+              console.warn('[BulkImport egg waste warning]:', wasteErr.message);
             }
           }
 

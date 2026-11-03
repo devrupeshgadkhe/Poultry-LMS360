@@ -41,3 +41,9 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
   - Provided bidirectional (vice-versa) auto-conversion between Weeks and Days in Flock creation and edit forms (1 Week = 7 Days).
   - Replaced UI-blocking `window.confirm()` and `window.alert()` calls with custom non-blocking React confirmation modals and toast alerts, ensuring controls are never frozen.
   - Resolved Flock edit/update failure by strictly sanitizing payloads against Supabase table columns before submission, preventing PostgreSQL column errors caused by client-computed properties.
+- **Bulk Excel/CSV Import & Smart Flock Matcher**:
+  - Migrated `server/bulkImportControllers.ts` from inactive local `query.all` stubs to direct Supabase Cloud queries (`supabaseServer`).
+  - Implemented `findSmartFlockMatch` algorithm supporting resilient multi-tier matching: exact case-sensitive, case-insensitive, normalized dashes/hyphens, alphanumeric punctuation-free (e.g., `B5-Batch5` == `B5 Batch 5`), numeric IDs, prefix-stripped identifiers, component/batch containment, and breed fallback.
+  - Extended farm scope resolution to search local farm first and fall back to global cloud registry, assigning the imported records to their true farm.
+  - Enhanced date parser (`cleanDate`) supporting YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY, timestamps, and Excel 5-digit serial numbers.
+  - Executed bulk commits (`commitImportData`) directly into Supabase tables (`DailyLogs`, `Inventories`, `Purchases`, `Sales`) with automatic head-count decrements and stock reconciliation.
