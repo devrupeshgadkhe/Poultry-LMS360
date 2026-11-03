@@ -171,22 +171,168 @@ export async function reconcileEggInventoryForFarm(farmId: number): Promise<void
     const fId = Number(farmId) || 1;
     await cleanDuplicateEggInventories(fId);
 
-    // 1. Check if any flocks exist on this farm
+    // 1. Supabase Cloud First (Pure Cloud Architecture)
+    if (supabaseServer) {
+      try {
+        const { data: flocksData } = await supabaseServer
+          .from('Flocks')
+          .select('Id')
+          .eq('FarmId', fId);
+
+        const flockCount = flocksData ? flocksData.length : 0;
+        if (flockCount === 0) {
+          await supabaseServer.from('EggInventories').update({ Quantity: 0 }).eq('FarmId', fId);
+          try { await query.run("UPDATE EggInventories SET Quantity = 0 WHERE FarmId = ?", [fId]); } catch {}
+          return;
+        }
+
+        // 2. Compute exact fresh eggs: (EggsCollected) - (EggsGifted) - (Fresh eggs sold) + (Fresh eggs returned)
+        const { data: logsData } = await supabaseServer
+          .from('DailyLogs')
+          .select('EggsCollected, DamagedEggsCollected, EggsGifted')
+          .eq('FarmId', fId)
+          .limit(100000);
+
+        let totalCollected = 0;
+        let totalDamaged = 0;
+        let totalGifted = 0;
+        (logsData || []).forEach((l: any) => {
+          totalCollected += Number(l.EggsCollected) || 0;
+          totalDamaged += Number(l.DamagedEggsCollected) || 0;
+          totalGifted += Number(l.EggsGifted) || 0;
+        });
+
+        // 3. Compute egg sales
+        const { data: salesData } = await supabaseServer
+          .from('Sales')
+          .select('Id')
+          .eq('FarmId', fId);
+
+        const saleIds = (salesData || []).map((s: any) => s.Id);
+        let soldFresh = 0;
+        let soldDamaged = 0;
+        if (saleIds.length > 0) {
+          const { data: saleItemsData } = await supabaseServer
+            .from('SaleItems')
+            .select('Quantity, ItemType, EggInventoryId')
+            .in('SaleId', saleIds);
+
+          const { data: eggTypes } = await supabaseServer
+            .from('EggInventories')
+            .select('Id, GradeOrType')
+            .eq('FarmId', fId);
+
+          const eggTypeMap = new Map((eggTypes || []).map((e: any) => [e.Id, e.GradeOrType]));
+
+          (saleItemsData || []).forEach((si: any) => {
+            if (si.ItemType === 'Egg') {
+              const grade = eggTypeMap.get(si.EggInventoryId) || 'Fresh Eggs';
+              if (grade === 'Damaged/Waste Eggs') {
+                soldDamaged += Number(si.Quantity) || 0;
+              } else {
+                soldFresh += Number(si.Quantity) || 0;
+              }
+            }
+          });
+        }
+
+        // 4. Compute egg returns
+        const { data: returnsData } = await supabaseServer
+          .from('SaleReturns')
+          .select('Id')
+          .eq('FarmId', fId);
+
+        const returnIds = (returnsData || []).map((r: any) => r.Id);
+        let returnedFresh = 0;
+        let returnedDamaged = 0;
+        if (returnIds.length > 0) {
+          const { data: returnItemsData } = await supabaseServer
+            .from('SaleReturnItems')
+            .select('Quantity, ItemType, EggInventoryId')
+            .in('SaleReturnId', returnIds);
+
+          const { data: eggTypes } = await supabaseServer
+            .from('EggInventories')
+            .select('Id, GradeOrType')
+            .eq('FarmId', fId);
+
+          const eggTypeMap = new Map((eggTypes || []).map((e: any) => [e.Id, e.GradeOrType]));
+
+          (returnItemsData || []).forEach((sri: any) => {
+            if (sri.ItemType === 'Egg') {
+              const grade = eggTypeMap.get(sri.EggInventoryId) || 'Fresh Eggs';
+              if (grade === 'Damaged/Waste Eggs') {
+                returnedDamaged += Number(sri.Quantity) || 0;
+              } else {
+                returnedFresh += Number(sri.Quantity) || 0;
+              }
+            }
+          });
+        }
+
+        const netFresh = Math.max(0, totalCollected - totalGifted - soldFresh + returnedFresh);
+        const netDamaged = Math.max(0, totalDamaged - soldDamaged + returnedDamaged);
+
+        // 5. Update or insert in Supabase EggInventories
+        const { data: existingFresh } = await supabaseServer
+          .from('EggInventories')
+          .select('Id')
+          .eq('FarmId', fId)
+          .eq('GradeOrType', 'Fresh Eggs');
+
+        if (existingFresh && existingFresh.length > 0) {
+          await supabaseServer.from('EggInventories').update({ Quantity: netFresh }).eq('Id', existingFresh[0].Id);
+        } else {
+          await supabaseServer.from('EggInventories').insert([{
+            FarmId: fId,
+            GradeOrType: 'Fresh Eggs',
+            PackSize: 'Single',
+            Quantity: netFresh,
+            UnitPrice: 5.0,
+            SellingPrice: 6.0
+          }]);
+        }
+
+        const { data: existingDamaged } = await supabaseServer
+          .from('EggInventories')
+          .select('Id')
+          .eq('FarmId', fId)
+          .eq('GradeOrType', 'Damaged/Waste Eggs');
+
+        if (existingDamaged && existingDamaged.length > 0) {
+          await supabaseServer.from('EggInventories').update({ Quantity: netDamaged }).eq('Id', existingDamaged[0].Id);
+        } else {
+          await supabaseServer.from('EggInventories').insert([{
+            FarmId: fId,
+            GradeOrType: 'Damaged/Waste Eggs',
+            PackSize: 'Single',
+            Quantity: netDamaged,
+            UnitPrice: 0,
+            SellingPrice: 0
+          }]);
+        }
+
+        // Mirror to SQLite if database exists
+        try {
+          await query.run("UPDATE EggInventories SET Quantity = ? WHERE GradeOrType = 'Fresh Eggs' AND FarmId = ?", [netFresh, fId]);
+          await query.run("UPDATE EggInventories SET Quantity = ? WHERE GradeOrType = 'Damaged/Waste Eggs' AND FarmId = ?", [netDamaged, fId]);
+        } catch {}
+
+        return;
+      } catch (sbEx: any) {
+        console.warn('[reconcileEggInventoryForFarm Supabase] Fallback notice:', sbEx.message);
+      }
+    }
+
+    // SQLite Fallback (if Supabase unavailable)
     const flockCountRow = await query.get<{ count: number }>("SELECT COUNT(*) as count FROM Flocks WHERE FarmId = ?", [fId]);
     const flockCount = flockCountRow ? flockCountRow.count : 0;
 
     if (flockCount === 0) {
-      // If ALL flocks are deleted for this farm, ALL eggs MUST BE RESET TO 0!
       await query.run("UPDATE EggInventories SET Quantity = 0 WHERE FarmId = ?", [fId]);
-      if (supabaseServer) {
-        try {
-          await supabaseServer.from('EggInventories').update({ Quantity: 0 }).eq('FarmId', fId);
-        } catch {}
-      }
       return;
     }
 
-    // 2. Compute exact fresh eggs: (EggsCollected from existing flocks) - (EggsGifted) - (Fresh eggs sold) + (Fresh eggs returned)
     const freshLogs = await query.get<{ collected: number, gifted: number }>(`
       SELECT 
         IFNULL(SUM(d.EggsCollected), 0) as collected,
@@ -218,7 +364,6 @@ export async function reconcileEggInventoryForFarm(farmId: number): Promise<void
 
     const netFresh = Math.max(0, (freshLogs?.collected || 0) - (freshLogs?.gifted || 0) - (freshSales?.sold || 0) + (freshReturns?.returned || 0));
 
-    // Damaged eggs
     const damagedLogs = await query.get<{ collected: number }>(`
       SELECT IFNULL(SUM(d.DamagedEggsCollected), 0) as collected
       FROM DailyLogs d
@@ -248,23 +393,13 @@ export async function reconcileEggInventoryForFarm(farmId: number): Promise<void
 
     const netDamaged = Math.max(0, (damagedLogs?.collected || 0) - (damagedSales?.sold || 0) + (damagedReturns?.returned || 0));
 
-    // Update single rows in SQLite
     await query.run("UPDATE EggInventories SET Quantity = ? WHERE GradeOrType = 'Fresh Eggs' AND FarmId = ?", [netFresh, fId]);
     await query.run("UPDATE EggInventories SET Quantity = ? WHERE GradeOrType = 'Damaged/Waste Eggs' AND FarmId = ?", [netDamaged, fId]);
-
-    // Update single rows in Supabase Cloud
-    if (supabaseServer) {
-      try {
-        await supabaseServer.from('EggInventories').update({ Quantity: netFresh }).eq('GradeOrType', 'Fresh Eggs').eq('FarmId', fId);
-        await supabaseServer.from('EggInventories').update({ Quantity: netDamaged }).eq('GradeOrType', 'Damaged/Waste Eggs').eq('FarmId', fId);
-      } catch (sbErr: any) {
-        console.warn('[reconcileEggInventoryForFarm] Supabase notice:', sbErr.message);
-      }
-    }
   } catch (err: any) {
     console.error('[reconcileEggInventoryForFarm] Error:', err);
   }
 }
+
 
 // User & Auth Controllers
 export const authControllers = {

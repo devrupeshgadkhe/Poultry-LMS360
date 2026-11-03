@@ -237,10 +237,7 @@ export default function Reports({ currentLanguage }: ReportsProps) {
       // Mortality Rate
       const mortalityRate = (totalMortalities / numVal(flock.InitialCount)) * 100;
 
-      // HDP: Hen Day Production
-      const hdp = (totalEggs / (numVal(flock.InitialCount) * activeDays)) * 100;
-
-      // Calculate daily closing birds sequence to compute average daily HDEP %
+      // Calculate daily closing birds sequence to compute average daily HDEP % (HDP)
       let runningBiCount = numVal(flock.InitialCount);
       const sortedFlockLogs = [...logs].sort((a: any, b: any) => a.LogDate.localeCompare(b.LogDate));
       let hdepSum = 0;
@@ -262,6 +259,9 @@ export default function Reports({ currentLanguage }: ReportsProps) {
         loggedDaysCount++;
       });
       const avgHdep = loggedDaysCount > 0 ? (hdepSum / loggedDaysCount) : 0;
+
+      // HDP: Hen Day Production (standardized to avgHdep)
+      const hdp = avgHdep;
 
       // FCR: Feed Conversion Ratio Layer Standard (Kg per Dozen eggs)
       const fcrStandardDozen = totalFreshEggs > 0 ? (totalFeedUsed / (totalFreshEggs / 12)) : 0;
