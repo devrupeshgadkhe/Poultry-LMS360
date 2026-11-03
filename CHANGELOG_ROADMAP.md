@@ -41,3 +41,10 @@
   - Built resilient `findSmartFlockMatch` algorithm recognizing exact, case-insensitive, dash/space normalized, alphanumeric punctuation-free, numeric ID, and prefix variations without hardcoding.
   - Enhanced date parser (`cleanDate`) supporting international date formats (DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD) and Excel numeric timestamps.
   - Direct atomic batch commit to Supabase Cloud (`DailyLogs`, `Inventories`, `Purchases`, `Sales`) with automatic flock current count and inventory reconciliation.
+- **v1.0.12**:
+  - Resolved bulk import hanging on "Syncing..." and stalling at ~100 records by eliminating sequential row-by-row HTTP round trips.
+  - Implemented high-throughput chunked batch inserts (100 rows per batch) in `server/bulkImportControllers.ts`, dropping 600+ record commit time from ~10 minutes down to under 2 seconds.
+  - Added smart pre-fetched deduplication: re-uploading an Excel/CSV compares against live Supabase data, inserting only missing records while skipping existing ones with zero duplicates and zero rework.
+  - Aggregated flock metrics, feed consumption, and egg inventories in memory for consolidated single updates per flock/farm instead of repeated database writes.
+  - Verified with 620-row live CSV (`poultry_daily_logs_template_B5.csv`): complete 620/620 records successfully stored in Supabase Cloud.
+

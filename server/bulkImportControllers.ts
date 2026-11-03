@@ -430,14 +430,14 @@ export const bulkImportControllers = {
       if (supabaseServer) {
         try {
           const [invRes, flkRes, supRes, custRes, eggRes, purchRes, salesRes, logsRes] = await Promise.all([
-            supabaseServer.from('Inventories').select('Id, ItemName, FarmId, Category, CurrentStock, UnitPrice'),
-            supabaseServer.from('Flocks').select('Id, FlockName, FarmId, Breed, CurrentCount, TotalFeedCost, Status, PerBirdPurchasePrice'),
-            supabaseServer.from('Suppliers').select('Id, CompanyName, FarmId'),
-            supabaseServer.from('Customers').select('Id, FullName, FarmId'),
-            supabaseServer.from('EggInventories').select('Id, GradeOrType, FarmId, Quantity'),
-            supabaseServer.from('Purchases').select('InvoiceNumber, FarmId'),
-            supabaseServer.from('Sales').select('InvoiceNumber, FarmId'),
-            supabaseServer.from('DailyLogs').select('FlockId, LogDate, FarmId')
+            supabaseServer.from('Inventories').select('Id, ItemName, FarmId, Category, CurrentStock, UnitPrice').limit(100000),
+            supabaseServer.from('Flocks').select('Id, FlockName, FarmId, Breed, CurrentCount, TotalFeedCost, Status, PerBirdPurchasePrice').limit(10000),
+            supabaseServer.from('Suppliers').select('Id, CompanyName, FarmId').limit(10000),
+            supabaseServer.from('Customers').select('Id, FullName, FarmId').limit(10000),
+            supabaseServer.from('EggInventories').select('Id, GradeOrType, FarmId, Quantity').limit(10000),
+            supabaseServer.from('Purchases').select('InvoiceNumber, FarmId').limit(100000),
+            supabaseServer.from('Sales').select('InvoiceNumber, FarmId').limit(100000),
+            supabaseServer.from('DailyLogs').select('FlockId, LogDate, FarmId').limit(100000)
           ]);
 
           allFlocks = flkRes.data || [];
@@ -609,6 +609,7 @@ export const bulkImportControllers = {
               status = 'Duplicate';
               details.push(`Daily log for "${matchedFlock.FlockName}" on ${logDate} already exists in DB. Skipping duplicate.`);
             } else {
+              dailyLogSet.add(logKey);
               details.push(`Matched Flock: "${matchedFlock.FlockName}" (ID: #${matchedFlock.Id}) [${matchResult.matchType}]`);
             }
           }
@@ -864,6 +865,65 @@ export const bulkImportControllers = {
         }
 
       } else if (type === 'daily-logs') {
+        // Collect all distinct flock IDs present in the valid records
+        const flockIds = Array.from(new Set(
+          validRecords.map(r => Number(r.record?._flockId)).filter(id => Boolean(id) && !isNaN(id))
+        ));
+
+        // 1. Pre-fetch existing log keys from Supabase in ONE query to ensure instant deduplication
+        const existingLogKeys = new Set<string>();
+        if (supabaseServer && flockIds.length > 0) {
+          try {
+            const { data: existingLogs } = await supabaseServer
+              .from('DailyLogs')
+              .select('FlockId, LogDate')
+              .in('FlockId', flockIds)
+              .limit(100000);
+
+            (existingLogs || []).forEach((l: any) => {
+              if (l.FlockId && l.LogDate) {
+                existingLogKeys.add(`${l.FlockId}_${cleanDate(l.LogDate)}`);
+              }
+            });
+          } catch (e: any) {
+            console.warn('[BulkImport pre-fetch existing logs warning]:', e.message);
+          }
+        }
+
+        // 2. Pre-fetch flocks in ONE query
+        let flocksData: any[] = [];
+        if (supabaseServer && flockIds.length > 0) {
+          try {
+            const { data: flks } = await supabaseServer
+              .from('Flocks')
+              .select('Id, FarmId, TotalFeedCost, CurrentCount, Status, PerBirdPurchasePrice')
+              .in('Id', flockIds);
+            flocksData = flks || [];
+          } catch (e: any) {
+            console.warn('[BulkImport pre-fetch flocks warning]:', e.message);
+          }
+        }
+        const flockMap = new Map<number, any>(flocksData.map(f => [f.Id, f]));
+
+        // 3. Pre-fetch inventories in ONE query
+        let invsData: any[] = [];
+        if (supabaseServer) {
+          try {
+            const { data: invs } = await supabaseServer
+              .from('Inventories')
+              .select('Id, FarmId, ItemName, Category, CurrentStock, UnitPrice')
+              .limit(50000);
+            invsData = invs || [];
+          } catch {}
+        }
+        const invMapById = new Map<number, any>(invsData.map(i => [i.Id, i]));
+
+        // Structures for batching and aggregation
+        const newLogsPayload: any[] = [];
+        const flockAggregates: Record<number, { feedCost: number; birdsRemoved: number }> = {};
+        const eggAggregates: Record<number, { fresh: number; damaged: number }> = {};
+        const feedStockDeductions: Record<number, number> = {};
+
         for (const pr of validRecords) {
           const rec = normalizeRecordKeys(pr.record);
           const logDate = cleanDate(rec.LogDate);
@@ -871,36 +931,15 @@ export const bulkImportControllers = {
 
           if (!flockId || !logDate) continue;
 
-          // 1. Re-verify duplicates in Supabase Cloud
-          if (supabaseServer) {
-            try {
-              const { data: exists } = await supabaseServer
-                .from('DailyLogs')
-                .select('Id')
-                .eq('FlockId', flockId)
-                .eq('LogDate', logDate)
-                .maybeSingle();
-
-              if (exists) {
-                duplicateSkipCount++;
-                continue;
-              }
-            } catch {}
+          // Deduplication check: if row already exists in DB or was already seen in this file, skip cleanly
+          const logKey = `${flockId}_${logDate}`;
+          if (existingLogKeys.has(logKey)) {
+            duplicateSkipCount++;
+            continue;
           }
+          existingLogKeys.add(logKey); // Prevent duplicate insertions within the same uploaded file
 
-          // 2. Fetch fresh Flock details
-          let flock: any = null;
-          if (supabaseServer) {
-            try {
-              const { data: flk } = await supabaseServer
-                .from('Flocks')
-                .select('Id, FarmId, TotalFeedCost, CurrentCount, Status, PerBirdPurchasePrice')
-                .eq('Id', flockId)
-                .maybeSingle();
-              flock = flk;
-            } catch {}
-          }
-
+          const flock = flockMap.get(flockId);
           const rowFarmId = (flock && flock.FarmId) ? flock.FarmId : (Number(rec._farmId) || targetFarmId);
 
           const feedConsumed = cleanFloat(rec.FeedConsumedKg || '0');
@@ -915,262 +954,191 @@ export const bulkImportControllers = {
           const eggsGiftedValue = cleanFloat(rec.EggsGiftedValue || '0');
           const notes = rec.Notes || '';
 
-          // 3. Resolve Feed Item & Pricing
+          // Resolve feed item
           let feedItemId = rec._feedItemId ? Number(rec._feedItemId) : null;
           let feedUnitPrice = 30.00;
-          let matchedFeedItem: any = null;
-
-          if (supabaseServer) {
-            try {
-              if (feedItemId) {
-                const { data: inv } = await supabaseServer.from('Inventories').select('*').eq('Id', feedItemId).maybeSingle();
-                matchedFeedItem = inv;
-              } else {
-                const feedNameInput = (rec.FeedName || '').trim();
-                if (feedNameInput && feedNameInput !== '0' && feedNameInput.toLowerCase() !== 'none' && feedNameInput !== '-') {
-                  const { data: invs } = await supabaseServer.from('Inventories').select('*').eq('FarmId', rowFarmId).ilike('ItemName', feedNameInput);
-                  if (invs && invs.length > 0) matchedFeedItem = invs[0];
-                }
-                if (!matchedFeedItem) {
-                  const { data: invs } = await supabaseServer.from('Inventories').select('*').eq('FarmId', rowFarmId).eq('Category', 'Feed').limit(1);
-                  if (invs && invs.length > 0) matchedFeedItem = invs[0];
-                }
-                if (!matchedFeedItem && feedConsumed > 0) {
-                  const { data: insFeed } = await supabaseServer.from('Inventories').insert([{
-                    FarmId: rowFarmId,
-                    ItemName: 'Default Feed',
-                    Category: 'Feed',
-                    UnitOfMeasurement: 'Kg',
-                    UnitPrice: 30.00,
-                    SellingPrice: 0,
-                    CurrentStock: 0,
-                    WeightPerUnit: 1,
-                    MinThreshold: 0,
-                    Notes: 'Auto-created default feed for historical tracking'
-                  }]).select().single();
-                  matchedFeedItem = insFeed;
-                }
+          if (feedItemId && invMapById.has(feedItemId)) {
+            feedUnitPrice = Number(invMapById.get(feedItemId).UnitPrice) || 30.00;
+          } else {
+            const feedNameInput = (rec.FeedName || '').trim();
+            if (feedNameInput && feedNameInput !== '0' && feedNameInput.toLowerCase() !== 'none' && feedNameInput !== '-') {
+              const matched = invsData.find(i => i.FarmId === rowFarmId && (i.ItemName || '').toLowerCase().trim() === feedNameInput.toLowerCase());
+              if (matched) {
+                feedItemId = matched.Id;
+                feedUnitPrice = Number(matched.UnitPrice) || 30.00;
               }
-
-              if (matchedFeedItem) {
-                feedItemId = matchedFeedItem.Id;
-                feedUnitPrice = Number(matchedFeedItem.UnitPrice) || 30.00;
-                if (feedConsumed > 0) {
-                  const currentStock = Number(matchedFeedItem.CurrentStock) || 0;
-                  await supabaseServer.from('Inventories').update({
-                    CurrentStock: currentStock - feedConsumed
-                  }).eq('Id', feedItemId);
-                }
-              }
-            } catch (feedErr: any) {
-              console.warn('[BulkImport feed resolution warning]:', feedErr.message);
             }
+            if (!feedItemId) {
+              const defFeed = invsData.find(i => i.FarmId === rowFarmId && i.Category === 'Feed');
+              if (defFeed) {
+                feedItemId = defFeed.Id;
+                feedUnitPrice = Number(defFeed.UnitPrice) || 30.00;
+              }
+            }
+          }
+
+          if (feedConsumed > 0 && feedItemId) {
+            feedStockDeductions[feedItemId] = (feedStockDeductions[feedItemId] || 0) + feedConsumed;
           }
 
           const feedCost = feedConsumed * feedUnitPrice;
           const dailyBirdCost = (flock && flock.PerBirdPurchasePrice) ? Number(flock.PerBirdPurchasePrice) : 0;
 
-          // 4. Insert Daily Log into Supabase Cloud
-          let logId = 0;
-          if (supabaseServer) {
-            try {
-              const { data: insLog, error: insErr } = await supabaseServer.from('DailyLogs').insert([{
-                FarmId: rowFarmId,
-                FlockId: flockId,
-                FeedItemId: feedItemId,
-                FeedConsumedKg: feedConsumed,
-                MortalityCount: mortality,
-                EggsCollected: eggs,
-                DamagedEggsCollected: damagedEggs,
-                LogDate: logDate,
-                FeedCost: feedCost,
-                DailyBirdCost: dailyBirdCost,
-                Notes: notes,
-                DailyAverageWeight: weight,
-                WaterConsumed: water,
-                BirdsEatenBySelf: birdsEatenBySelf,
-                BirdsEatenValue: birdsEatenValue,
-                EggsGifted: eggsGifted,
-                EggsGiftedValue: eggsGiftedValue
-              }]).select('Id').single();
-
-              if (insErr) {
-                console.error('[BulkImport daily-logs commit error]:', insErr.message);
-                continue;
-              }
-              logId = insLog?.Id || 0;
-              saveCount++;
-            } catch (insCatch: any) {
-              console.error('[BulkImport daily-logs insert exception]:', insCatch.message);
-              continue;
-            }
+          // Track flock aggregates in memory
+          if (!flockAggregates[flockId]) {
+            flockAggregates[flockId] = { feedCost: 0, birdsRemoved: 0 };
           }
+          flockAggregates[flockId].feedCost += feedCost;
+          flockAggregates[flockId].birdsRemoved += (mortality + birdsEatenBySelf);
 
-          // 5. Update Flock Head Count & Feed Costs in Supabase
-          if (flock && supabaseServer) {
-            try {
-              const updatedFeedCost = (Number(flock.TotalFeedCost) || 0) + feedCost;
-              const totalBirdsRemoved = mortality + birdsEatenBySelf;
-              const newCurrentCount = Math.max(0, (Number(flock.CurrentCount) || 0) - totalBirdsRemoved);
-              const status = newCurrentCount <= 0 ? 'Inactive' : flock.Status;
-
-              await supabaseServer.from('Flocks').update({
-                TotalFeedCost: updatedFeedCost,
-                CurrentCount: newCurrentCount,
-                Status: status
-              }).eq('Id', flockId);
-            } catch (flkErr: any) {
-              console.warn('[BulkImport flock update warning]:', flkErr.message);
-            }
+          // Track egg aggregates in memory
+          if (!eggAggregates[rowFarmId]) {
+            eggAggregates[rowFarmId] = { fresh: 0, damaged: 0 };
           }
+          eggAggregates[rowFarmId].fresh += (eggs - eggsGifted);
+          eggAggregates[rowFarmId].damaged += damagedEggs;
 
-          // 6. Update Egg Inventories in Supabase
-          const netFreshEggs = eggs - eggsGifted;
-          if (netFreshEggs !== 0 && supabaseServer) {
-            try {
-              const { data: eggRows } = await supabaseServer
-                .from('EggInventories')
-                .select('*')
-                .eq('FarmId', rowFarmId)
-                .eq('GradeOrType', 'Fresh Eggs');
-
-              if (eggRows && eggRows.length > 0) {
-                await supabaseServer.from('EggInventories').update({
-                  Quantity: (Number(eggRows[0].Quantity) || 0) + netFreshEggs
-                }).eq('Id', eggRows[0].Id);
-              } else {
-                await supabaseServer.from('EggInventories').insert([{
-                  FarmId: rowFarmId,
-                  GradeOrType: 'Fresh Eggs',
-                  Quantity: netFreshEggs,
-                  UnitCost: 5.0
-                }]);
-              }
-            } catch (eggErr: any) {
-              console.warn('[BulkImport egg inventory warning]:', eggErr.message);
-            }
-          }
-
-          if (damagedEggs > 0 && supabaseServer) {
-            try {
-              const { data: wasteRows } = await supabaseServer
-                .from('EggInventories')
-                .select('*')
-                .eq('FarmId', rowFarmId)
-                .eq('GradeOrType', 'Damaged/Waste Eggs');
-
-              if (wasteRows && wasteRows.length > 0) {
-                await supabaseServer.from('EggInventories').update({
-                  Quantity: (Number(wasteRows[0].Quantity) || 0) + damagedEggs
-                }).eq('Id', wasteRows[0].Id);
-              } else {
-                await supabaseServer.from('EggInventories').insert([{
-                  FarmId: rowFarmId,
-                  GradeOrType: 'Damaged/Waste Eggs',
-                  Quantity: damagedEggs,
-                  UnitCost: 0
-                }]);
-              }
-            } catch (wasteErr: any) {
-              console.warn('[BulkImport egg waste warning]:', wasteErr.message);
-            }
-          }
-
-          // Financial transaction for Feed Consumption
-          if (feedCost > 0) {
-            let catId = 9;
-            const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Feed Consumption'");
-            if (catObj) {
-              catId = catObj.Id;
-            } else {
-              const insertCat = await query.run(`
-                INSERT INTO TransactionCategories (FarmId, Name, IsIncome, Description)
-                VALUES (?, 'Feed Consumption', 0, 'Feed consumed by active bird flocks')
-              `, [rowFarmId]);
-              catId = insertCat.lastID;
-            }
-            const feedName = matchedFeedItem ? matchedFeedItem.ItemName : 'Feed';
-            const txRes = await query.run(`
-              INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
-              VALUES (?, ?, ?, 'Expense', ?, ?, ?)
-            `, [rowFarmId, logDate, feedCost, catId, `[DailyLog #${logId}] Consume ${feedConsumed} Kg of ${feedName}`, flockId]);
-            syncRecordToSupabase('FinancialTransactions', {
-              Id: txRes.lastID,
-              FarmId: rowFarmId,
-              Date: logDate,
-              Amount: feedCost,
-              Type: 'Expense',
-              CategoryId: catId,
-              Notes: `[DailyLog #${logId}] Consume ${feedConsumed} Kg of ${feedName}`,
-              FlockId: flockId
-            });
-          }
-
-          // Financial transaction for Personal Consumption
-          if (birdsEatenBySelf > 0 && birdsEatenValue > 0) {
-            let catId = 10;
-            const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Personal Consumption'");
-            if (catObj) {
-              catId = catObj.Id;
-            } else {
-              const insertCat = await query.run(`
-                INSERT INTO TransactionCategories (FarmId, Name, IsIncome, Description)
-                VALUES (?, 'Personal Consumption', 0, 'Internal birds eaten by self')
-              `, [rowFarmId]);
-              catId = insertCat.lastID;
-            }
-            const txRes = await query.run(`
-              INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
-              VALUES (?, ?, ?, 'Expense', ?, ?, ?)
-            `, [rowFarmId, logDate, birdsEatenBySelf * birdsEatenValue, catId, `[DailyLog #${logId}] Birds eaten by self: ${birdsEatenBySelf} birds`, flockId]);
-            syncRecordToSupabase('FinancialTransactions', {
-              Id: txRes.lastID,
-              FarmId: rowFarmId,
-              Date: logDate,
-              Amount: birdsEatenBySelf * birdsEatenValue,
-              Type: 'Expense',
-              CategoryId: catId,
-              Notes: `[DailyLog #${logId}] Birds eaten by self: ${birdsEatenBySelf} birds`,
-              FlockId: flockId
-            });
-          }
-
-          // Financial transaction for Gifts & Donations
-          if (eggsGifted > 0 && eggsGiftedValue > 0) {
-            let catId = 11;
-            const catObj = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Gifts & Donations'");
-            if (catObj) {
-              catId = catObj.Id;
-            } else {
-              const insertCat = await query.run(`
-                INSERT INTO TransactionCategories (FarmId, Name, IsIncome, Description)
-                VALUES (?, 'Gifts & Donations', 0, 'Internal and external gifted eggs/birds')
-              `, [rowFarmId]);
-              catId = insertCat.lastID;
-            }
-            const txRes = await query.run(`
-              INSERT INTO FinancialTransactions (FarmId, Date, Amount, Type, CategoryId, Notes, FlockId)
-              VALUES (?, ?, ?, 'Expense', ?, ?, ?)
-            `, [rowFarmId, logDate, eggsGifted * eggsGiftedValue, catId, `[DailyLog #${logId}] Eggs gifted: ${eggsGifted} eggs`, flockId]);
-            syncRecordToSupabase('FinancialTransactions', {
-              Id: txRes.lastID,
-              FarmId: rowFarmId,
-              Date: logDate,
-              Amount: eggsGifted * eggsGiftedValue,
-              Type: 'Expense',
-              CategoryId: catId,
-              Notes: `[DailyLog #${logId}] Eggs gifted: ${eggsGifted} eggs`,
-              FlockId: flockId
-            });
-          }
-
-          saveCount++;
+          newLogsPayload.push({
+            FarmId: rowFarmId,
+            FlockId: flockId,
+            FeedItemId: feedItemId,
+            FeedConsumedKg: feedConsumed,
+            MortalityCount: mortality,
+            EggsCollected: eggs,
+            DamagedEggsCollected: damagedEggs,
+            LogDate: logDate,
+            FeedCost: feedCost,
+            DailyBirdCost: dailyBirdCost,
+            Notes: notes,
+            DailyAverageWeight: weight,
+            WaterConsumed: water,
+            BirdsEatenBySelf: birdsEatenBySelf,
+            BirdsEatenValue: birdsEatenValue,
+            EggsGifted: eggsGifted,
+            EggsGiftedValue: eggsGiftedValue
+          });
         }
 
-        // Reconcile and synchronize all egg inventories and flock head counts across SQLite and Supabase
-        await cleanDuplicateEggInventories(targetFarmId);
-        await reconcileEggInventoryForFarm(targetFarmId);
-        await reconcileAllFlocksInventory();
+        // 4. High-Throughput Batch Insert in chunks of 100 rows
+        if (supabaseServer && newLogsPayload.length > 0) {
+          const CHUNK_SIZE = 100;
+          for (let i = 0; i < newLogsPayload.length; i += CHUNK_SIZE) {
+            const chunk = newLogsPayload.slice(i, i + CHUNK_SIZE);
+            try {
+              const { error: insErr } = await supabaseServer.from('DailyLogs').insert(chunk);
+              if (insErr) {
+                console.error('[BulkImport batch chunk error]:', insErr.message);
+                // Fallback to inserting individual rows of this chunk
+                for (const row of chunk) {
+                  const { error: sErr } = await supabaseServer.from('DailyLogs').insert([row]);
+                  if (!sErr) saveCount++;
+                }
+              } else {
+                saveCount += chunk.length;
+              }
+            } catch (chunkEx: any) {
+              console.error('[BulkImport chunk exception]:', chunkEx.message);
+            }
+          }
+        }
+
+        // 5. Update Flocks in Supabase (single consolidated update per flock)
+        if (supabaseServer) {
+          for (const [fIdStr, agg] of Object.entries(flockAggregates)) {
+            const fId = Number(fIdStr);
+            const flock = flockMap.get(fId);
+            if (flock) {
+              try {
+                const updatedFeedCost = (Number(flock.TotalFeedCost) || 0) + agg.feedCost;
+                const newCurrentCount = Math.max(0, (Number(flock.CurrentCount) || 0) - agg.birdsRemoved);
+                const status = newCurrentCount <= 0 ? 'Inactive' : flock.Status;
+
+                await supabaseServer.from('Flocks').update({
+                  TotalFeedCost: updatedFeedCost,
+                  CurrentCount: newCurrentCount,
+                  Status: status
+                }).eq('Id', fId);
+              } catch (flkErr: any) {
+                console.warn('[BulkImport flock update warning]:', flkErr.message);
+              }
+            }
+          }
+        }
+
+        // 6. Update Egg Inventories in Supabase (single consolidated update per farm)
+        if (supabaseServer) {
+          for (const [fIdStr, eggAgg] of Object.entries(eggAggregates)) {
+            const farmIdNum = Number(fIdStr);
+            if (eggAgg.fresh !== 0) {
+              try {
+                const { data: eggRows } = await supabaseServer
+                  .from('EggInventories')
+                  .select('*')
+                  .eq('FarmId', farmIdNum)
+                  .eq('GradeOrType', 'Fresh Eggs');
+
+                if (eggRows && eggRows.length > 0) {
+                  await supabaseServer.from('EggInventories').update({
+                    Quantity: (Number(eggRows[0].Quantity) || 0) + eggAgg.fresh
+                  }).eq('Id', eggRows[0].Id);
+                } else {
+                  await supabaseServer.from('EggInventories').insert([{
+                    FarmId: farmIdNum,
+                    GradeOrType: 'Fresh Eggs',
+                    Quantity: eggAgg.fresh,
+                    UnitCost: 5.0
+                  }]);
+                }
+              } catch {}
+            }
+            if (eggAgg.damaged > 0) {
+              try {
+                const { data: wasteRows } = await supabaseServer
+                  .from('EggInventories')
+                  .select('*')
+                  .eq('FarmId', farmIdNum)
+                  .eq('GradeOrType', 'Damaged/Waste Eggs');
+
+                if (wasteRows && wasteRows.length > 0) {
+                  await supabaseServer.from('EggInventories').update({
+                    Quantity: (Number(wasteRows[0].Quantity) || 0) + eggAgg.damaged
+                  }).eq('Id', wasteRows[0].Id);
+                } else {
+                  await supabaseServer.from('EggInventories').insert([{
+                    FarmId: farmIdNum,
+                    GradeOrType: 'Damaged/Waste Eggs',
+                    Quantity: eggAgg.damaged,
+                    UnitCost: 0
+                  }]);
+                }
+              } catch {}
+            }
+          }
+        }
+
+        // 7. Update Feed Inventory Stock (single consolidated update per feed item)
+        if (supabaseServer) {
+          for (const [itemIdStr, consumed] of Object.entries(feedStockDeductions)) {
+            const itemIdNum = Number(itemIdStr);
+            const inv = invMapById.get(itemIdNum);
+            if (inv && consumed > 0) {
+              try {
+                const curStock = Number(inv.CurrentStock) || 0;
+                await supabaseServer.from('Inventories').update({
+                  CurrentStock: curStock - consumed
+                }).eq('Id', itemIdNum);
+              } catch {}
+            }
+          }
+        }
+
+        // Reconcile and synchronize all egg inventories and flock head counts
+        try {
+          await cleanDuplicateEggInventories(targetFarmId);
+          await reconcileEggInventoryForFarm(targetFarmId);
+          await reconcileAllFlocksInventory();
+        } catch {}
+
 
       } else if (type === 'purchases') {
         for (const pr of validRecords) {
