@@ -31,3 +31,8 @@
   - Fixed Supabase Node.js boot error ("native WebSocket not found") by implementing an autonomous `SafeWebSocketStub` and polyfilling `ws` across Electron main and server processes.
   - Fixed Windows "EPERM mkdir poultry360_backups" crash by relocating backup storage to user writable %APPDATA% directory.
   - Updated architectural context and roadmap tracking files.
+- **v1.0.10**:
+  - Implemented poultry biological age calculation formula (`Current Age = Arrival Age + Elapsed Days`) with Weeks and Days breakdown.
+  - Added real-time bidirectional (vice-versa) Weeks <-> Days auto-conversion inputs in Flock forms.
+  - Eliminated UI-blocking native `window.alert()` and `window.confirm()` from Flock management, replacing them with modern styled React modals.
+  - Fixed Flock edit and update persistence by strictly whitelisting Supabase table columns and syncing with cloud backend.

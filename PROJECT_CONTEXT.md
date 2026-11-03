@@ -36,3 +36,8 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
   - Resolved "Node.js detected but native WebSocket not found" boot error by creating an autonomous `SafeWebSocketStub` implementation, polyfilling `globalThis.WebSocket` and `global.WebSocket`, and providing the realtime transport option to Supabase client initialization.
   - Wrapped `AuditLogs` local query execution in safe try-catch blocks to prevent unhandled database exceptions during audit tracking.
   - Resolved "EPERM: operation not permitted, mkdir poultry360_backups" boot crash on Windows by moving the backups directory from read-only `C:\Program Files` to the user's writable `%APPDATA%\Poultry LMS 360\poultry360_backups` with safe try-catch fallbacks.
+- **Flock Management & Age Calculations**:
+  - Added accurate poultry biological age calculation incorporating Arrival Age: `Current Age = Arrival Age (Days) + Elapsed Days since Arrival`.
+  - Provided bidirectional (vice-versa) auto-conversion between Weeks and Days in Flock creation and edit forms (1 Week = 7 Days).
+  - Replaced UI-blocking `window.confirm()` and `window.alert()` calls with custom non-blocking React confirmation modals and toast alerts, ensuring controls are never frozen.
+  - Resolved Flock edit/update failure by strictly sanitizing payloads against Supabase table columns before submission, preventing PostgreSQL column errors caused by client-computed properties.

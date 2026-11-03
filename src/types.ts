@@ -48,6 +48,11 @@ export interface Flock {
   TotalVaccineCost: number | null;
   PerBirdPurchasePrice: number | null;
   AgeInDays: number | null;
+  AgeWeeks?: number;
+  AgeDaysRem?: number;
+  ArrivalAgeDays?: number;
+  ArrivalAgeWeeks?: number;
+  ArrivalAgeRemDays?: number;
   Notes: string;
 }
 

@@ -126,9 +126,18 @@ export const flockService = {
 
       const mortalityRate = initCount > 0 ? (deadCount / initCount) * 100 : 0;
 
+      const arrivalAgeDays = Math.max(0, Number(flock.AgeInDays) || 0);
       const arrDate = flock.ArrivalDate ? new Date(flock.ArrivalDate) : today;
-      const diffTime = Math.abs(today.getTime() - arrDate.getTime());
-      const ageInDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+      const arrMidnight = new Date(arrDate.getFullYear(), arrDate.getMonth(), arrDate.getDate());
+      const endD = flock.EndDate ? new Date(flock.EndDate) : today;
+      const endMidnight = new Date(endD.getFullYear(), endD.getMonth(), endD.getDate());
+      const diffTime = endMidnight.getTime() - arrMidnight.getTime();
+      const elapsedDays = Math.max(0, Math.floor(diffTime / (1000 * 60 * 60 * 24)));
+      const currentAgeInDays = arrivalAgeDays + elapsedDays;
+      const currentAgeWeeks = Math.floor(currentAgeInDays / 7);
+      const currentAgeDaysRem = currentAgeInDays % 7;
+      const arrivalAgeWeeks = Math.floor(arrivalAgeDays / 7);
+      const arrivalAgeDaysRem = arrivalAgeDays % 7;
 
       const totalPurchase = Number(flock.TotalPurchasePrice) || 0;
       const perBird = Number(flock.PerBirdPurchasePrice) || (initCount > 0 ? totalPurchase / initCount : 0);
@@ -154,7 +163,12 @@ export const flockService = {
         PerBirdPurchasePrice: perBird,
         TotalFeedCost: feedCost,
         TotalVaccineCost: vaccineCost,
-        AgeInDays: Number(flock.AgeInDays) || ageInDays,
+        AgeInDays: currentAgeInDays,
+        AgeWeeks: currentAgeWeeks,
+        AgeDaysRem: currentAgeDaysRem,
+        ArrivalAgeDays: arrivalAgeDays,
+        ArrivalAgeWeeks: arrivalAgeWeeks,
+        ArrivalAgeRemDays: arrivalAgeDaysRem,
         MortalityRate: mortalityRate,
         HDP: hdp,
         TotalEggsCollected: stats.eggs,
@@ -185,6 +199,10 @@ export const flockService = {
       }
     }
 
+    const arrivalAge = typeof (flockData as any).ArrivalAgeDays !== 'undefined'
+      ? Number((flockData as any).ArrivalAgeDays) || 0
+      : (Number(flockData.AgeInDays) || 0);
+
     const payload = {
       FarmId: farmId,
       FlockName: flockData.FlockName || 'Unnamed Flock',
@@ -199,7 +217,7 @@ export const flockService = {
       TotalFeedCost: 0,
       TotalVaccineCost: 0,
       PerBirdPurchasePrice: perBird,
-      AgeInDays: Number(flockData.AgeInDays) || 1,
+      AgeInDays: arrivalAge,
       Notes: flockData.Notes || ''
     };
 
@@ -220,9 +238,35 @@ export const flockService = {
    * Update an existing flock
    */
   async updateFlock(farmId: number, flockId: number, flockData: Partial<Flock>): Promise<Flock> {
+    const initialCount = Number(flockData.InitialCount) || 0;
+    const currentCount = typeof flockData.CurrentCount !== 'undefined' ? Number(flockData.CurrentCount) : initialCount;
+    const totalPurchasePrice = Number(flockData.TotalPurchasePrice) || 0;
+    const perBird = initialCount > 0 ? totalPurchasePrice / initialCount : 0;
+
+    // Strict whitelist of valid Supabase Flocks table columns only (excludes computed stats like MortalityRate, HDP, etc.)
+    const updatePayload: Record<string, any> = {};
+    if (typeof flockData.FlockName !== 'undefined') updatePayload.FlockName = String(flockData.FlockName).trim();
+    if (typeof flockData.Breed !== 'undefined') updatePayload.Breed = String(flockData.Breed).trim();
+    if (typeof flockData.InitialCount !== 'undefined') updatePayload.InitialCount = initialCount;
+    if (typeof flockData.CurrentCount !== 'undefined') updatePayload.CurrentCount = currentCount;
+    if (typeof flockData.ArrivalDate !== 'undefined') updatePayload.ArrivalDate = flockData.ArrivalDate;
+    if (typeof flockData.StartDate !== 'undefined') updatePayload.StartDate = flockData.StartDate;
+    if (typeof flockData.EndDate !== 'undefined') updatePayload.EndDate = flockData.EndDate || null;
+    if (typeof flockData.Status !== 'undefined') updatePayload.Status = flockData.Status;
+    if (typeof flockData.IsActive !== 'undefined') updatePayload.IsActive = flockData.IsActive ? 1 : (flockData.Status === 'Sold' ? 0 : 1);
+    if (typeof flockData.TotalPurchasePrice !== 'undefined') updatePayload.TotalPurchasePrice = totalPurchasePrice;
+    if (typeof flockData.PerBirdPurchasePrice !== 'undefined') updatePayload.PerBirdPurchasePrice = perBird;
+    if (typeof (flockData as any).ArrivalAgeDays !== 'undefined') {
+      updatePayload.AgeInDays = Number((flockData as any).ArrivalAgeDays) || 0;
+    } else if (typeof flockData.AgeInDays !== 'undefined') {
+      updatePayload.AgeInDays = Number(flockData.AgeInDays) || 0;
+    }
+    if (typeof flockData.Notes !== 'undefined') updatePayload.Notes = flockData.Notes || '';
+
+    // 1. Direct update to Supabase Cloud
     const { data, error } = await supabase
       .from('Flocks')
-      .update(flockData)
+      .update(updatePayload)
       .eq('Id', flockId)
       .eq('FarmId', farmId)
       .select()
@@ -232,6 +276,21 @@ export const flockService = {
       console.error('[flockService.updateFlock] Error:', error.message);
       throw error;
     }
+
+    // 2. Also notify backend API to keep synchronization
+    try {
+      await fetch(`/api/flocks/${flockId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Email': localStorage.getItem('userEmail') || 'admin'
+        },
+        body: JSON.stringify(updatePayload)
+      });
+    } catch (apiErr) {
+      console.warn('[flockService.updateFlock] Backend sync notice:', apiErr);
+    }
+
     return data;
   },
 

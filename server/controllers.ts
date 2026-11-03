@@ -467,8 +467,11 @@ export const flockControllers = {
         // Calculate age
         const arrDate = new Date(flock.ArrivalDate || today);
         const endDate = flock.EndDate ? new Date(flock.EndDate) : today;
-        const diffTime = Math.abs(endDate.getTime() - arrDate.getTime());
-        const ageInDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+        const arrivalAgeDays = Math.max(0, Number(flock.AgeInDays) || 0);
+        const arrMidnight = new Date(arrDate.getFullYear(), arrDate.getMonth(), arrDate.getDate());
+        const endMidnight = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+        const elapsedDays = Math.max(0, Math.floor((endMidnight.getTime() - arrMidnight.getTime()) / (1000 * 60 * 60 * 24)));
+        const ageInDays = arrivalAgeDays + elapsedDays;
         
         // Feed & egg KPI calculations
         const accMort = flock.AccumulatedMortality || 0;
@@ -507,6 +510,7 @@ export const flockControllers = {
           CurrentCount: currentActiveBirds,
           TotalFeedCost: totalFeedCost,
           AgeInDays: ageInDays,
+          ArrivalAgeDays: arrivalAgeDays,
           MortalityRate: mortalityRate,
           HDP: hdp,
           TotalEggsCollected: freshCl,
@@ -523,17 +527,43 @@ export const flockControllers = {
   },
 
   async create(req: Request, res: Response) {
-    const { FlockName, Breed, InitialCount, ArrivalDate, StartDate, TotalPurchasePrice, Notes } = req.body;
+    const { FlockName, Breed, InitialCount, ArrivalDate, StartDate, TotalPurchasePrice, AgeInDays, Notes } = req.body;
     try {
       const perBird = InitialCount > 0 ? TotalPurchasePrice / InitialCount : 0;
+      const arrivalAge = Number(AgeInDays) || 0;
       let flockId = 0;
+      const farmId = Number(req.headers['x-farm-id'] || req.query.farmId || (req.body && req.body.FarmId)) || 1;
+
+      if (supabaseServer) {
+        try {
+          const { data: sbCreated } = await supabaseServer.from('Flocks').insert([{
+            FarmId: farmId,
+            FlockName,
+            Breed,
+            InitialCount: Number(InitialCount),
+            CurrentCount: Number(InitialCount),
+            ArrivalDate,
+            StartDate,
+            Status: 'Active',
+            IsActive: 1,
+            TotalPurchasePrice: Number(TotalPurchasePrice),
+            PerBirdPurchasePrice: perBird,
+            AgeInDays: arrivalAge,
+            Notes: Notes || ''
+          }]).select().single();
+          if (sbCreated) flockId = sbCreated.Id;
+        } catch (sbErr: any) {
+          console.warn('[flock create supabase]', sbErr.message);
+        }
+      }
+
       await query.serializeTransaction(async () => {
         const result = await query.run(`
-          INSERT INTO Flocks (FlockName, Breed, InitialCount, CurrentCount, ArrivalDate, StartDate, Status, TotalPurchasePrice, PerBirdPurchasePrice, TotalFeedCost, TotalVaccineCost, IsActive, Notes)
-          VALUES (?, ?, ?, ?, ?, ?, 'Active', ?, ?, 0, 0, 1, ?)
-        `, [FlockName, Breed, InitialCount, InitialCount, ArrivalDate, StartDate, TotalPurchasePrice, perBird, Notes || '']);
+          INSERT INTO Flocks (FlockName, Breed, InitialCount, CurrentCount, ArrivalDate, StartDate, Status, TotalPurchasePrice, PerBirdPurchasePrice, TotalFeedCost, TotalVaccineCost, IsActive, AgeInDays, Notes)
+          VALUES (?, ?, ?, ?, ?, ?, 'Active', ?, ?, 0, 0, 1, ?, ?)
+        `, [FlockName, Breed, InitialCount, InitialCount, ArrivalDate, StartDate, TotalPurchasePrice, perBird, arrivalAge, Notes || '']);
         
-        flockId = result.lastID;
+        if (!flockId) flockId = result.lastID;
 
         // Ensure transaction category 'Bird Purchases' exists
         let cat = await query.get<{ Id: number }>("SELECT Id FROM TransactionCategories WHERE Name = 'Bird Purchases'");
@@ -564,15 +594,39 @@ export const flockControllers = {
 
   async update(req: Request, res: Response) {
     const { id } = req.params;
-    const { FlockName, Breed, InitialCount, CurrentCount, ArrivalDate, StartDate, EndDate, Status, TotalPurchasePrice, Notes } = req.body;
+    const { FlockName, Breed, InitialCount, CurrentCount, ArrivalDate, StartDate, EndDate, Status, TotalPurchasePrice, AgeInDays, Notes } = req.body;
     try {
       const perBird = InitialCount > 0 ? TotalPurchasePrice / InitialCount : 0;
+      const arrivalAge = Number(AgeInDays) || 0;
+
+      if (supabaseServer) {
+        try {
+          await supabaseServer.from('Flocks').update({
+            FlockName: String(FlockName).trim(),
+            Breed: String(Breed).trim(),
+            InitialCount: Number(InitialCount),
+            CurrentCount: Number(CurrentCount),
+            ArrivalDate,
+            StartDate,
+            EndDate: EndDate || null,
+            Status: Status || 'Active',
+            IsActive: Status === 'Sold' ? 0 : 1,
+            TotalPurchasePrice: Number(TotalPurchasePrice),
+            PerBirdPurchasePrice: perBird,
+            AgeInDays: arrivalAge,
+            Notes: Notes || ''
+          }).eq('Id', id);
+        } catch (sbUpErr: any) {
+          console.warn('[flock update supabase]', sbUpErr.message);
+        }
+      }
+
       await query.serializeTransaction(async () => {
         await query.run(`
           UPDATE Flocks
-          SET FlockName = ?, Breed = ?, InitialCount = ?, CurrentCount = ?, ArrivalDate = ?, StartDate = ?, EndDate = ?, Status = ?, TotalPurchasePrice = ?, PerBirdPurchasePrice = ?, Notes = ?
+          SET FlockName = ?, Breed = ?, InitialCount = ?, CurrentCount = ?, ArrivalDate = ?, StartDate = ?, EndDate = ?, Status = ?, TotalPurchasePrice = ?, PerBirdPurchasePrice = ?, AgeInDays = ?, Notes = ?
           WHERE Id = ?
-        `, [FlockName, Breed, InitialCount, CurrentCount, ArrivalDate, StartDate, EndDate || null, Status, TotalPurchasePrice, perBird, Notes || '', id]);
+        `, [FlockName, Breed, InitialCount, CurrentCount, ArrivalDate, StartDate, EndDate || null, Status, TotalPurchasePrice, perBird, arrivalAge, Notes || '', id]);
 
         // Clean slate for existing transaction linked to this flock purchase
         await query.run("DELETE FROM FinancialTransactions WHERE Notes LIKE ?", [`[Flock #${id}]%`]);
@@ -648,7 +702,7 @@ export const dailyLogsControllers = {
     try {
       const targetFarmId = Number(req.query.farmId || req.headers['x-farm-id']) || null;
       let logsQuery = `
-        SELECT d.*, f.FlockName, f.ArrivalDate, f.StartDate, f.InitialCount, f.CurrentCount, i.ItemName as FeedItemName
+        SELECT d.*, f.FlockName, f.ArrivalDate, f.StartDate, f.InitialCount, f.CurrentCount, f.AgeInDays as FlockArrivalAge, i.ItemName as FeedItemName
         FROM DailyLogs d
         JOIN Flocks f ON d.FlockId = f.Id
         LEFT JOIN Inventories i ON d.FeedItemId = i.Id
@@ -693,12 +747,14 @@ export const dailyLogsControllers = {
         const closingBirds = Math.max(0, openingBirds - dead - eaten - sold);
         runningBirdsCount[log.FlockId] = closingBirds;
 
+        const arrivalAge = Math.max(0, Number(log.FlockArrivalAge || log.AgeInDays) || 0);
         const startD = log.ArrivalDate || log.StartDate;
         let ageInDays: number | null = null;
         if (startD) {
           const birth = new Date(startD);
           const logD = new Date(log.LogDate);
-          ageInDays = Math.max(0, Math.floor((logD.getTime() - birth.getTime()) / (1000 * 60 * 60 * 24)));
+          const elapsed = Math.max(0, Math.floor((logD.getTime() - birth.getTime()) / (1000 * 60 * 60 * 24)));
+          ageInDays = arrivalAge + elapsed;
         }
 
         const totalEggsLaid = (log.EggsCollected || 0) + (log.DamagedEggsCollected || 0);
