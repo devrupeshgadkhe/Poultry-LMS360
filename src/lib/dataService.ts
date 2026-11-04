@@ -143,10 +143,10 @@ export const flockService = {
       const perBird = Number(flock.PerBirdPurchasePrice) || (initCount > 0 ? totalPurchase / initCount : 0);
 
       const totalEggs = stats.eggs + stats.damaged;
-      const layingDaysCount = stats.layingDays ? stats.layingDays.size : 0;
-      const avgLiveBirds = Math.max(1, (initCount + currCount) / 2);
-      const totalHenDays = avgLiveBirds * Math.max(1, layingDaysCount);
-      const hdp = (layingDaysCount > 0 && totalHenDays > 0 && totalEggs > 0)
+      const totalLogsCount = (logs || []).filter((l: any) => l.FlockId === flock.Id).length;
+      const effectiveDays = layingDaysCount > 0 ? layingDaysCount : Math.max(1, totalLogsCount);
+      const totalHenDays = avgLiveBirds * effectiveDays;
+      const hdp = (totalHenDays > 0 && totalEggs > 0)
         ? Math.min(100, (totalEggs / totalHenDays) * 100)
         : 0;
 
