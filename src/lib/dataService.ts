@@ -78,13 +78,15 @@ export const flockService = {
 
     // Also fetch daily logs for egg collection, mortality, laying days and feed costs
     let logsMap: Record<number, { eggs: number; damaged: number; mortalities: number; birdsEaten: number; layingDays: Set<string>; feedCost: number }> = {};
+    let logs: any[] = [];
     try {
-      const { data: logs } = await supabase
+      const { data: logsData } = await supabase
         .from('DailyLogs')
         .select('FlockId, LogDate, EggsCollected, DamagedEggsCollected, MortalityCount, BirdsEatenBySelf, FeedCost')
         .eq('FarmId', farmId);
       
-      if (logs) {
+      if (logsData) {
+        logs = logsData;
         logs.forEach((log: any) => {
           const fid = log.FlockId;
           if (!logsMap[fid]) logsMap[fid] = { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0, layingDays: new Set(), feedCost: 0 };
@@ -144,6 +146,8 @@ export const flockService = {
 
       const totalEggs = stats.eggs + stats.damaged;
       const totalLogsCount = (logs || []).filter((l: any) => l.FlockId === flock.Id).length;
+      const layingDaysCount = stats.layingDays ? stats.layingDays.size : 0;
+      const avgLiveBirds = Math.max(1, initCount - Math.floor(logMortality / 2));
       const effectiveDays = layingDaysCount > 0 ? layingDaysCount : Math.max(1, totalLogsCount);
       const totalHenDays = avgLiveBirds * effectiveDays;
       const hdp = (totalHenDays > 0 && totalEggs > 0)
