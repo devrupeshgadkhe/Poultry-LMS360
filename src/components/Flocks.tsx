@@ -5,6 +5,28 @@ import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { flockService } from '../lib/dataService';
 
+const formatDateDDMMYYYY = (dateStr: string) => {
+  if (!dateStr) return '';
+  const clean = dateStr.split('T')[0];
+  const parts = clean.split('-');
+  if (parts.length === 3) {
+    if (parts[0].length === 4) {
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+    if (parts[2].length === 4) {
+      return clean;
+    }
+  }
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}-${month}-${year}`;
+  }
+  return clean;
+};
+
 interface FlocksProps {
   currentLanguage?: Language;
 }
@@ -843,7 +865,7 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
                   <div className="flex items-center justify-between text-[11px] text-slate-500">
                     <span>{t.launched}:</span>
                     <span className="font-mono font-medium text-slate-700">
-                      {(flock.ArrivalDate || '').split('T')[0]}
+                      {formatDateDDMMYYYY(flock.ArrivalDate)}
                     </span>
                   </div>
                 </div>

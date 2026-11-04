@@ -1,7 +1,74 @@
 import { Request, Response } from 'express';
 import { query } from './db.js';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { supabaseServer, syncRecordToSupabase, deleteRecordFromSupabase } from './supabase.js';
+import { parseCSV, normalizeRecordKeys, cleanDate, cleanInt, cleanFloat } from './bulkImportControllers.js';
+
+export async function autoSeedFlockLogsIfMissing() {
+  try {
+    const flocks = await query.all<any>('SELECT Id, FlockName, FarmId, InitialCount FROM Flocks');
+    for (const flock of flocks) {
+      const name = (flock.FlockName || '').toLowerCase();
+      const logCountRes = await query.get<{ cnt: number }>('SELECT COUNT(*) as cnt FROM DailyLogs WHERE FlockId = ?', [flock.Id]);
+      const count = logCountRes ? logCountRes.cnt : 0;
+      if (count === 0) {
+        let csvFileName = '';
+        if (name.includes('b5') || name.includes('batch5')) csvFileName = 'poultry_daily_logs_template_B5.csv';
+        else if (name.includes('b6') || name.includes('batch6')) csvFileName = 'poultry_daily_logs_template_B6.csv';
+        else if (name.includes('b7') || name.includes('batch7')) csvFileName = 'poultry_daily_logs_template_B7.csv';
+        else if (name.includes('b8') || name.includes('batch8')) csvFileName = 'poultry_daily_logs_template_B8.csv';
+
+        if (csvFileName) {
+          let csvPath = path.join(process.cwd(), csvFileName);
+          if (!fs.existsSync(csvPath)) {
+            csvPath = path.join(process.cwd(), 'test-Excel', csvFileName);
+          }
+          if (fs.existsSync(csvPath)) {
+            const csvContent = fs.readFileSync(csvPath, 'utf8');
+            const rows = parseCSV(csvContent);
+            if (rows.length > 1) {
+              const headers = rows[0].map(h => h.trim());
+              const dataRows = rows.slice(1);
+              for (const r of dataRows) {
+                if (r.length === 0 || !r.some(c => c && c.trim())) continue;
+                const rawRec: any = {};
+                headers.forEach((h, idx) => {
+                  rawRec[h] = r[idx] ? r[idx].trim() : '';
+                });
+                const norm = normalizeRecordKeys(rawRec);
+                const logDate = cleanDate(norm.LogDate);
+                if (!logDate) continue;
+                const eggs = cleanInt(norm.EggsCollected || 0);
+                const mortality = cleanInt(norm.MortalityCount || 0);
+                const feed = cleanFloat(norm.FeedConsumedKg || 0);
+                const damaged = cleanInt(norm.DamagedEggsCollected || 0);
+                const notes = norm.Notes || '';
+
+                await query.run(`
+                  INSERT INTO DailyLogs (FarmId, FlockId, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, LogDate, FeedCost, Notes)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `, [flock.FarmId || 1, flock.Id, feed, mortality, eggs, damaged, logDate, feed * 30.0, notes]);
+              }
+              const agg = await query.get<{ totalFeed: number; totalMort: number }>(
+                'SELECT SUM(FeedCost) as totalFeed, SUM(MortalityCount) as totalMort FROM DailyLogs WHERE FlockId = ?',
+                [flock.Id]
+              );
+              const totalFeed = agg ? (agg.totalFeed || 0) : 0;
+              const totalMort = agg ? (agg.totalMort || 0) : 0;
+              const newCount = Math.max(0, (flock.InitialCount || 1000) - totalMort);
+              await query.run('UPDATE Flocks SET TotalFeedCost = ?, CurrentCount = ? WHERE Id = ?', [totalFeed, newCount, flock.Id]);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error in autoSeedFlockLogsIfMissing:', err);
+  }
+}
+
 
 export async function getAverageLandedCost(inventoryId: number | null): Promise<number> {
   if (!inventoryId) return 0;
@@ -566,6 +633,7 @@ export const inventoryControllers = {
 export const flockControllers = {
   async list(req: Request, res: Response) {
     try {
+      await autoSeedFlockLogsIfMissing();
       const farmId = Number(req.query.farmId || req.headers['x-farm-id']);
       let whereClause = '';
       const params: any[] = [];
