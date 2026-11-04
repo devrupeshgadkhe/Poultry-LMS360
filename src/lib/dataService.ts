@@ -76,21 +76,44 @@ export const flockService = {
     const rawFlocks = data || [];
     if (rawFlocks.length === 0) return [];
 
-    // Also fetch daily logs for egg collection, mortality, laying days and feed costs
-    let logsMap: Record<number, { eggs: number; damaged: number; mortalities: number; birdsEaten: number; layingDays: Set<string>; feedCost: number }> = {};
+    // Also fetch daily logs for egg collection, mortality, laying days and feed costs with range pagination to avoid Supabase 1,000-row cap
+    let logsMap: Record<number, { eggs: number; damaged: number; mortalities: number; birdsEaten: number; layingDays: Set<string>; feedCost: number; totalLogs: number }> = {};
     let logs: any[] = [];
     try {
       const flockIds = rawFlocks.map((f: any) => f.Id);
-      const { data: logsData } = await supabase
-        .from('DailyLogs')
-        .select('FlockId, LogDate, EggsCollected, DamagedEggsCollected, MortalityCount, BirdsEatenBySelf, FeedCost')
-        .in('FlockId', flockIds);
-      
-      if (logsData) {
-        logs = logsData;
+      let page = 0;
+      let hasMore = true;
+      const allLogsData: any[] = [];
+
+      while (hasMore) {
+        const { data: pageChunk, error: pageErr } = await supabase
+          .from('DailyLogs')
+          .select('FlockId, LogDate, EggsCollected, DamagedEggsCollected, MortalityCount, BirdsEatenBySelf, FeedCost')
+          .in('FlockId', flockIds)
+          .range(page * 1000, (page + 1) * 1000 - 1);
+
+        if (pageErr) {
+          console.warn('[flockService.getFlocks] Paginated logs fetch warning:', pageErr.message);
+          break;
+        }
+
+        if (!pageChunk || pageChunk.length === 0) {
+          hasMore = false;
+        } else {
+          allLogsData.push(...pageChunk);
+          if (pageChunk.length < 1000) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        }
+      }
+
+      if (allLogsData.length > 0) {
+        logs = allLogsData;
         logs.forEach((log: any) => {
           const fid = log.FlockId;
-          if (!logsMap[fid]) logsMap[fid] = { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0, layingDays: new Set(), feedCost: 0 };
+          if (!logsMap[fid]) logsMap[fid] = { eggs: 0, damaged: 0, mortalities: 0, birdsEaten: 0, layingDays: new Set(), feedCost: 0, totalLogs: 0 };
           const eColl = Number(log.EggsCollected) || 0;
           const dmgColl = Number(log.DamagedEggsCollected) || 0;
           logsMap[fid].eggs += eColl;
@@ -98,6 +121,7 @@ export const flockService = {
           logsMap[fid].mortalities += Number(log.MortalityCount) || 0;
           logsMap[fid].birdsEaten += Number(log.BirdsEatenBySelf) || 0;
           logsMap[fid].feedCost += Number(log.FeedCost) || 0;
+          logsMap[fid].totalLogs += 1;
           if (eColl > 0 || dmgColl > 0) {
             logsMap[fid].layingDays.add((log.LogDate || '').split('T')[0]);
           }
@@ -348,19 +372,42 @@ export const dailyLogService = {
   async getDailyLogs(farmId: number, flockId?: number): Promise<DailyLog[]> {
     let rawLogs: DailyLog[] = [];
     try {
-      let query = supabase
-        .from('DailyLogs')
-        .select('*')
-        .eq('FarmId', farmId)
-        .order('LogDate', { ascending: true });
+      let page = 0;
+      let hasMore = true;
+      const allDailyLogs: DailyLog[] = [];
 
-      if (flockId) {
-        query = query.eq('FlockId', flockId);
+      while (hasMore) {
+        let q = supabase
+          .from('DailyLogs')
+          .select('*')
+          .eq('FarmId', farmId)
+          .order('LogDate', { ascending: true })
+          .range(page * 1000, (page + 1) * 1000 - 1);
+
+        if (flockId) {
+          q = q.eq('FlockId', flockId);
+        }
+
+        const { data: chunk, error: chunkErr } = await q;
+        if (chunkErr) {
+          console.warn('[dailyLogService.getDailyLogs] Paginated query notice:', chunkErr.message);
+          break;
+        }
+
+        if (!chunk || chunk.length === 0) {
+          hasMore = false;
+        } else {
+          allDailyLogs.push(...chunk);
+          if (chunk.length < 1000) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        }
       }
 
-      const { data, error } = await query;
-      if (!error && data && data.length > 0) {
-        rawLogs = data;
+      if (allDailyLogs.length > 0) {
+        rawLogs = allDailyLogs;
       }
     } catch (err: any) {
       console.warn('[dailyLogService.getDailyLogs] Supabase query notice:', err?.message);
