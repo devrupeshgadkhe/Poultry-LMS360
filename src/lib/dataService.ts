@@ -80,10 +80,11 @@ export const flockService = {
     let logsMap: Record<number, { eggs: number; damaged: number; mortalities: number; birdsEaten: number; layingDays: Set<string>; feedCost: number }> = {};
     let logs: any[] = [];
     try {
+      const flockIds = rawFlocks.map((f: any) => f.Id);
       const { data: logsData } = await supabase
         .from('DailyLogs')
         .select('FlockId, LogDate, EggsCollected, DamagedEggsCollected, MortalityCount, BirdsEatenBySelf, FeedCost')
-        .eq('FarmId', farmId);
+        .in('FlockId', flockIds);
       
       if (logsData) {
         logs = logsData;

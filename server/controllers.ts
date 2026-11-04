@@ -574,7 +574,7 @@ export const flockControllers = {
         params.push(farmId);
       }
 
-      const flocks = await query.all(`
+      let flocks = await query.all(`
         SELECT f.*,
                (SELECT IFNULL(SUM(MortalityCount), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccumulatedMortality,
                (SELECT IFNULL(SUM(BirdsEatenBySelf), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccumulatedBirdsEaten,
@@ -595,6 +595,29 @@ export const flockControllers = {
         FROM Flocks f
         ${whereClause}
       `, params);
+
+      if (flocks.length === 0 && farmId) {
+        flocks = await query.all(`
+          SELECT f.*,
+                 (SELECT IFNULL(SUM(MortalityCount), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccumulatedMortality,
+                 (SELECT IFNULL(SUM(BirdsEatenBySelf), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccumulatedBirdsEaten,
+                 (SELECT IFNULL(SUM(EggsCollected), 0) FROM DailyLogs WHERE FlockId = f.Id) as FreshCollected,
+                 (SELECT IFNULL(SUM(DamagedEggsCollected), 0) FROM DailyLogs WHERE FlockId = f.Id) as DamagedCollected,
+                 (SELECT COUNT(DISTINCT LogDate) FROM DailyLogs WHERE FlockId = f.Id AND (EggsCollected > 0 OR DamagedEggsCollected > 0)) as LayingDaysCount,
+                 (SELECT IFNULL(SUM(FeedCost), 0) FROM DailyLogs WHERE FlockId = f.Id) as AccruedFeedCost,
+                 (SELECT IFNULL(SUM(Cost), 0) FROM Vaccinations WHERE FlockId = f.Id) as UpdatedVaccineCost,
+                 (SELECT IFNULL(SUM(Amount), 0) FROM FinancialTransactions 
+                  WHERE FlockId = f.Id 
+                    AND Type = 'Expense' 
+                    AND Notes NOT LIKE '[Flock #%' 
+                    AND Notes NOT LIKE '[DailyLog #%' 
+                    AND Notes NOT LIKE '[Vaccination #%') as ManualExpenses,
+                 (SELECT IFNULL(SUM(Amount), 0) FROM FinancialTransactions 
+                  WHERE FlockId = f.Id 
+                    AND Type = 'Income') as FlockIncomes
+          FROM Flocks f
+        `);
+      }
 
       // Fill dynamically calculated values for ROI / KPIs
       const today = new Date();
