@@ -131,6 +131,7 @@ jobs:
             final-release/*.exe
             final-release/*.apk
           tag_name: v1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
           name: "Poultry LMS 360 v1.0.${{ github.run_number }} (Windows .EXE & Android .APK)"
           body: |
             ### 🐔 Poultry LMS 360 - Official Multi-Platform Release
@@ -142,6 +143,7 @@ jobs:
             - ☁️ **Cloud Database:** Real-time synchronization with Supabase Cloud
           draft: false
           prerelease: false
-          overwrite: true
+          overwrite_files: true
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
