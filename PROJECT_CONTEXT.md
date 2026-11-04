@@ -53,4 +53,9 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
   - Implemented pre-fetched deduplication: comparing incoming rows with live Supabase database and intra-file keys so that re-uploading imports only missing rows while preserving existing records without creating duplicates.
   - Aggregated flock metrics, feed consumption, and egg inventories in memory, executing single consolidated updates per flock and farm.
   - Successfully verified with real-world 620-row dataset (`poultry_daily_logs_template_B5.csv`), with all 620 records completely synchronized to Supabase Cloud.
+- **Flock Performance, Batch 6 Auto-Link & Strict DD-MM-YYYY Date Standardization**:
+  - Resolved `ReferenceError: logs is not defined` bug in flock query fallbacks and prevented empty flock cards on the Flocks dashboard.
+  - Fixed zero Egg Laying Rate (Hen-Day Production / HDP %) and zero Egg Production Cost for newly created/re-entered batches (such as Batch 6 / `B6-Batch6`) by creating an automated flock log linker and seed mechanism (`autoSeedFlockLogsIfMissing`) in `server/controllers.ts`.
+  - Dynamically calculates active laying days count, live bird headcount deduction (mortality + personal consumption), accrued feed cost, and net flock outlay across all flocks.
+  - Standardized all dates displayed on the Flocks page strictly to `DD-MM-YYYY` format (e.g., `08-05-2025`), ensuring unified date presentation across all flock cards and badges.
 

@@ -47,4 +47,8 @@
   - Added smart pre-fetched deduplication: re-uploading an Excel/CSV compares against live Supabase data, inserting only missing records while skipping existing ones with zero duplicates and zero rework.
   - Aggregated flock metrics, feed consumption, and egg inventories in memory for consolidated single updates per flock/farm instead of repeated database writes.
   - Verified with 620-row live CSV (`poultry_daily_logs_template_B5.csv`): complete 620/620 records successfully stored in Supabase Cloud.
+- **v1.0.13**:
+  - Resolved `ReferenceError: logs is not defined` in `src/lib/dataService.ts` to ensure flock metrics load reliably without errors.
+  - Fixed zero Egg Laying Rate (`HDP %`) and zero Egg Production Cost (`PerEggCost`) for newly created and re-entered flocks (specifically Batch 6 / `B6-Batch6`) by introducing `autoSeedFlockLogsIfMissing` in `server/controllers.ts`.
+  - Unified date presentation across the Flocks page: all dates (arrival date, launch date, etc.) are strictly formatted in `DD-MM-YYYY` format only.
 
