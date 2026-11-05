@@ -96,7 +96,9 @@ export const UserAccessManager: React.FC = () => {
         headers: {
           'Authorization': `Bearer ${token}`,
           'X-User-Role': myRole,
-          'X-Farm-Id': String(farmId)
+          'X-Farm-Id': String(farmId),
+          'X-User-Email': localStorage.getItem('userEmail') || '',
+          'X-User-Name': localStorage.getItem('userName') || ''
         }
       });
       if (res.ok) {
@@ -367,22 +369,47 @@ export const UserAccessManager: React.FC = () => {
 
   // Filtered users list
   const activeFarmId = currentFarm?.Id || Number(localStorage.getItem('userFarmId')) || 1;
+  const myEmail = (localStorage.getItem('userEmail') || '').toLowerCase().trim();
+  const myUsername = (localStorage.getItem('userName') || '').toLowerCase().trim();
+
   const filteredUsers = users.filter(u => {
     const matchesSearch =
       u.Username.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.FullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.Email.toLowerCase().includes(searchQuery.toLowerCase());
 
-    if (myRole !== 'Developer') {
-      // Farm Admin only sees users of their own farm, excluding Developer
-      return matchesSearch && u.Role !== 'Developer' && Number(u.FarmId || 1) === activeFarmId;
+    if (!matchesSearch) return false;
+
+    if (myRole === 'Developer') {
+      const matchesFarm =
+        farmFilter === 'all' ||
+        String(u.FarmId || 1) === farmFilter;
+      return matchesFarm;
     }
 
-    const matchesFarm =
-      farmFilter === 'all' ||
-      String(u.FarmId || 1) === farmFilter;
+    // Rule: "Not developer login or administration login, those details should not be visible to that particular farm and its user."
+    const isDeveloperLogin =
+      u.Role === 'Developer' ||
+      u.Username?.toLowerCase() === 'developer' ||
+      u.Email?.toLowerCase() === 'dev@poultrylms.com' ||
+      Number(u.Id) === 2;
 
-    return matchesSearch && matchesFarm;
+    const isAdministrationLogin =
+      u.Username?.toLowerCase() === 'admin' ||
+      u.Email?.toLowerCase() === 'admin@poultrylms.com' ||
+      Number(u.Id) === 1;
+
+    if (isDeveloperLogin || isAdministrationLogin) return false;
+
+    // Rule: For any farm, if employee/staff (not Admin): user can see their details only
+    if (myRole !== 'Admin') {
+      const isSelf = (u.Email && u.Email.toLowerCase().trim() === myEmail) ||
+                     (u.Username && u.Username.toLowerCase().trim() === myUsername);
+      return isSelf;
+    }
+
+    // Rule: Their farm admin can see all the users of that particular farm only
+    return Number(u.FarmId || 1) === activeFarmId;
   });
 
   return (
@@ -395,14 +422,16 @@ export const UserAccessManager: React.FC = () => {
               <Key className="w-5 h-5" />
             </span>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-800 tracking-tight">
-              {myRole === 'Developer' ? 'User Access & Passwords' : 'Farm Operators & Staff Access'}
+              {myRole === 'Developer' ? 'User Access & Passwords' : myRole === 'Admin' ? 'Farm Operators & Staff Access' : 'My Operator Account & Profile'}
             </h1>
             <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
               myRole === 'Developer' 
                 ? 'bg-amber-50 text-amber-700 border-amber-200' 
-                : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                : myRole === 'Admin'
+                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
             }`}>
-              {myRole === 'Developer' ? 'Developer SuperAdmin' : 'Farm Administrator'}
+              {myRole === 'Developer' ? 'Developer SuperAdmin' : myRole === 'Admin' ? 'Farm Administrator' : 'Farm Operator Profile'}
             </span>
             <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-50 text-emerald-700 font-medium px-2 py-0.5 rounded-full border border-emerald-200">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -412,7 +441,9 @@ export const UserAccessManager: React.FC = () => {
           <p className="text-xs text-slate-500 mt-1">
             {myRole === 'Developer'
               ? 'Centralized operator credentials management. Inspect farm accounts, reveal security keys, and reset passwords.'
-              : `Manage staff operators, passwords, and task permissions for ${currentFarm?.FarmName || 'your farm'}.`}
+              : myRole === 'Admin'
+              ? `Manage staff operators, passwords, and task permissions for ${currentFarm?.FarmName || 'your farm'}.`
+              : 'View and manage your personal operator account details and security credentials.'}
           </p>
         </div>
 
@@ -426,14 +457,16 @@ export const UserAccessManager: React.FC = () => {
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          <button
-            onClick={handleOpenCreateModal}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/15 cursor-pointer"
-            id="btn-add-operator"
-          >
-            <UserPlus className="w-4 h-4" />
-            Add New Operator
-          </button>
+          {(myRole === 'Developer' || myRole === 'Admin') && (
+            <button
+              onClick={handleOpenCreateModal}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/15 cursor-pointer"
+              id="btn-add-operator"
+            >
+              <UserPlus className="w-4 h-4" />
+              Add New Operator
+            </button>
+          )}
         </div>
       </div>
 
@@ -662,7 +695,10 @@ export const UserAccessManager: React.FC = () => {
                         <div className="inline-flex items-center gap-1">
                           {(() => {
                             const isPrivileged = user.Role === 'Developer' || user.Role === 'Admin';
-                            const canManage = myRole === 'Developer' || (!isPrivileged && myRole === 'Admin');
+                            const isSelf = (user.Email && user.Email.toLowerCase().trim() === myEmail) ||
+                                           (user.Username && user.Username.toLowerCase().trim() === myUsername);
+                            const canManage = myRole === 'Developer' || (!isPrivileged && myRole === 'Admin') || isSelf;
+                            const canDelete = (myRole === 'Developer' || myRole === 'Admin') && !isPrivileged && user.Username !== 'admin' && user.Username !== 'developer';
 
                             if (!canManage) {
                               return (
@@ -696,7 +732,7 @@ export const UserAccessManager: React.FC = () => {
                                   <Edit2 className="w-3.5 h-3.5" />
                                 </button>
 
-                                {user.Username !== 'developer' && user.Username !== 'admin' && (
+                                {canDelete && (
                                   <button
                                     onClick={() => handleDeleteUser(user)}
                                     className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition cursor-pointer"

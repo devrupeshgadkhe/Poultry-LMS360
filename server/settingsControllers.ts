@@ -371,7 +371,7 @@ export const settingsControllers = {
   }
 };
 
-function getRequester(req: Request): { Role?: string; FarmId?: number; Id?: number; Username?: string } | null {
+function getRequester(req: Request): { Role?: string; FarmId?: number; Id?: number; Username?: string; Email?: string } | null {
   const authHeader = req.headers['authorization'];
   if (authHeader && authHeader.startsWith('Bearer ')) {
     try {
@@ -383,10 +383,13 @@ function getRequester(req: Request): { Role?: string; FarmId?: number; Id?: numb
       }
     } catch {}
   }
-  const role = req.headers['x-user-role'] as string;
+  const role = (req.headers['x-user-role'] as string) || undefined;
   const farmId = req.headers['x-farm-id'] ? Number(req.headers['x-farm-id']) : undefined;
-  if (role) {
-    return { Role: role, FarmId: farmId };
+  const email = (req.headers['x-user-email'] as string) || undefined;
+  const username = (req.headers['x-user-name'] as string) || undefined;
+  const id = req.headers['x-user-id'] ? Number(req.headers['x-user-id']) : undefined;
+  if (role || email || username || id) {
+    return { Role: role, FarmId: farmId, Email: email, Username: username, Id: id };
   }
   return null;
 }
@@ -398,12 +401,46 @@ export const userManagementControllers = {
       const requester = getRequester(req);
       let users = await getSupabaseUsers();
 
-      if (requester && requester.Role !== 'Developer') {
-        const farmId = Number(requester.FarmId) || 1;
-        // Farm Admin / Staff can only see users of their own farm, and never developer accounts
-        users = (users || []).filter((u: any) =>
-          u.Role !== 'Developer' && Number(u.FarmId || 1) === farmId
-        );
+      // Developer login: can view all user accounts
+      if (requester && requester.Role === 'Developer') {
+        return res.json(users || []);
+      }
+
+      // Non-developer login (Farm Admin, Staff, Employee):
+      // 1. "Not developer login or administration login, those details should not be visible to that particular farm and its user."
+      users = (users || []).filter((u: any) => {
+        const isDeveloperLogin =
+          u.Role === 'Developer' ||
+          u.Username?.toLowerCase() === 'developer' ||
+          u.Email?.toLowerCase() === 'dev@poultrylms.com' ||
+          Number(u.Id) === 2;
+
+        const isAdministrationLogin =
+          u.Username?.toLowerCase() === 'admin' ||
+          u.Email?.toLowerCase() === 'admin@poultrylms.com' ||
+          Number(u.Id) === 1;
+
+        return !isDeveloperLogin && !isAdministrationLogin;
+      });
+
+      const role = requester?.Role;
+      const farmId = Number(requester?.FarmId) || Number(req.headers['x-farm-id']) || 1;
+      const reqEmail = (requester?.Email || (req.headers['x-user-email'] as string) || '').toLowerCase().trim();
+      const reqUsername = (requester?.Username || (req.headers['x-user-name'] as string) || '').toLowerCase().trim();
+      const reqId = requester?.Id ? Number(requester.Id) : (req.headers['x-user-id'] ? Number(req.headers['x-user-id']) : undefined);
+
+      if (role === 'Admin') {
+        // "their farm admin can see all the users of that particular farm only"
+        users = users.filter((u: any) => Number(u.FarmId || 1) === farmId);
+      } else {
+        // Employee / Staff / Worker:
+        // "User can see their details only"
+        users = users.filter((u: any) => {
+          if (reqId && Number(u.Id) === reqId) return true;
+          if (reqEmail && u.Email && u.Email.toLowerCase().trim() === reqEmail) return true;
+          if (reqUsername && u.Username && u.Username.toLowerCase().trim() === reqUsername) return true;
+          return false;
+        });
       }
 
       res.json(users || []);
@@ -570,6 +607,12 @@ export const userManagementControllers = {
   // GET /api/audit_logs_filtered
   async getAuditLogsFiltered(req: Request, res: Response) {
     try {
+      const requester = getRequester(req);
+      if (!requester || requester.Role !== 'Developer') {
+        // Audit log trails are restricted to Developer login only
+        return res.json([]);
+      }
+
       const { search, module, status, limit, startDate, endDate } = req.query;
       const farmId = Number(req.query.farmId || req.headers['x-farm-id']);
 

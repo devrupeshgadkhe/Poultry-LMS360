@@ -55,4 +55,11 @@
   - Fixed Medicines & Vaccines (Immunization) editing bug where updating an existing vaccination record inserted a duplicate instead of updating the target row.
   - Added `vaccinationService.updateVaccination()` method with flock vaccine cost auto-recalculation.
   - Formatted all displayed dates in the Medicines & Vaccines module strictly as `DD-MM-YYYY`.
+- **v1.0.15**:
+  - Restricted System Audit Log Trails and SQL query tracing strictly to Developer login (`Developer`); completely hidden from any individual farm.
+  - Multi-tenant Operator Privacy:
+    - Normal farm employees/staff can see only their own user details.
+    - Farm Administrators can see all users belonging to their specific farm only.
+    - Developer logins and root Administration logins are completely invisible to any individual farm and its users.
+  - Enforced dual-layer security across both backend controllers (`/api/users`, `/api/audit_logs_filtered`, `/api/audit_logs`) and frontend components (`SettingsAudit.tsx`, `UserAccessManager.tsx`, and `App.tsx`).
 

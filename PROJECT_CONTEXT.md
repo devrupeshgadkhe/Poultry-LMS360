@@ -55,11 +55,15 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
   - Successfully verified with real-world 620-row dataset (`poultry_daily_logs_template_B5.csv`), with all 620 records completely synchronized to Supabase Cloud.
 - **Flock Performance, Batch 6 Auto-Link & Strict DD-MM-YYYY Date Standardization**:
   - Resolved `ReferenceError: logs is not defined` bug in flock query fallbacks and prevented empty flock cards on the Flocks dashboard.
-  - Fixed zero Egg Laying Rate (Hen-Day Production / HDP %) and zero Egg Production Cost for newly created/re-entered batches (such as Batch 6 / `B6-Batch6`) by creating an automated flock log linker and seed mechanism (`autoSeedFlockLogsIfMissing`) in `server/controllers.ts`.
-  - Dynamically calculates active laying days count, live bird headcount deduction (mortality + personal consumption), accrued feed cost, and net flock outlay across all flocks.
-  - Standardized all dates displayed on the Flocks page strictly to `DD-MM-YYYY` format (e.g., `08-05-2025`), ensuring unified date presentation across all flock cards and badges.
 - **Medicines & Vaccines (Healthcare) Edit Fix & DD-MM-YYYY Date Standardization**:
   - Resolved edit bug where editing an existing vaccination record inserted a new duplicate record instead of updating the existing one.
   - Implemented `vaccinationService.updateVaccination()` in `src/lib/dataService.ts` targeting the specific vaccination ID with automated recalculation of `TotalVaccineCost` in `Flocks` table for both the current flock and previous flock (if altered).
   - Formatted all dates displayed in the Medicines & Vaccines module strictly to `DD-MM-YYYY` format (Log Date and Scheduled Target Date).
+- **Audit Log Trails Developer Restriction & Tenant User Privacy**:
+  - Restricted System Audit Log Trails and SQL query tracing exclusively to Developer login (`myRole === 'Developer'`); completely hidden for any individual farm.
+  - Enforced multi-tenant operator privacy:
+    - Normal farm employees/staff can see only their own user details.
+    - Farm Administrators can see all users belonging to their specific farm only.
+    - Developer logins and root Administration logins are completely invisible to any individual farm or its users.
+  - Applied dual-layer security across backend APIs (`/api/users`, `/api/audit_logs_filtered`, `/api/audit_logs`) and frontend views (`SettingsAudit.tsx`, `UserAccessManager.tsx`, and `App.tsx`).
 

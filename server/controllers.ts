@@ -3896,6 +3896,18 @@ export const sysDashboardControllers = {
 
   async getAuditLogs(req: Request, res: Response) {
     try {
+      const authHeader = req.headers['authorization'];
+      let role = req.headers['x-user-role'] as string;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const payload = JSON.parse(Buffer.from(authHeader.substring(7), 'base64').toString('utf-8'));
+          if (payload && payload.Role) role = payload.Role;
+        } catch {}
+      }
+      if (role !== 'Developer') {
+        return res.json([]);
+      }
+
       const farmId = Number(req.query.farmId || req.headers['x-farm-id']);
       let sql = 'SELECT * FROM AuditLogs';
       const params: any[] = [];

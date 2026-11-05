@@ -363,7 +363,7 @@ export default function App() {
     
     // Farm Admin or Developer tools
     if (tabName === 'User Access') {
-      return userRole === 'Admin' || hasPermission('admin');
+      return true; // Developer, Admin, and individual operators can access to view their permitted accounts/profile
     }
     if (tabName === 'Farm Settings & Access') {
       return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
@@ -372,7 +372,7 @@ export default function App() {
       return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
     }
     if (tabName === 'Audit Logs') {
-      return userRole === 'Admin' || hasPermission('settings.view') || hasPermission('admin');
+      return userRole === 'Developer';
     }
     if (tabName === 'Bulk Data Import') {
       return userRole === 'Admin' || hasPermission('bulkimport.view') || hasPermission('admin');
@@ -425,9 +425,9 @@ export default function App() {
     { name: 'Bulk Data Import', icon: FileSpreadsheet, roles: ['Developer', 'Admin'], permission: 'bulkimport.view' },
     { name: 'Super Admin Console', icon: Shield, roles: ['Developer'] },
     { name: 'Legacy Migrator', icon: Database, roles: ['Developer'] },
-    { name: 'User Access', icon: Key, roles: ['Developer', 'Admin'] },
+    { name: 'User Access', icon: Key, roles: ['Developer', 'Admin', 'Staff', 'Worker'] },
     { name: 'Backups', icon: Cloud, roles: ['Developer', 'Admin'], permission: 'settings.view' },
-    { name: 'Audit Logs', icon: History, roles: ['Developer', 'Admin'], permission: 'settings.view' },
+    { name: 'Audit Logs', icon: History, roles: ['Developer'] },
     { name: 'Farm Settings & Access', icon: Settings, roles: ['Developer', 'Admin'], permission: 'settings.view' },
   ];
 
@@ -804,6 +804,9 @@ export default function App() {
       case 'Backups':
         return <Backups currentLanguage={currentLanguage} />;
       case 'Audit Logs':
+        if (userRole !== 'Developer') {
+          return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
+        }
         return <SettingsAudit currentLanguage={currentLanguage} />;
       case 'Farm Settings & Access':
         return <SettingsAudit currentLanguage={currentLanguage} />;
@@ -820,9 +823,6 @@ export default function App() {
         }
         return <LegacyMigrator userRole={userRole} />;
       case 'User Access':
-        if (userRole !== 'Developer' && userRole !== 'Admin') {
-          return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
-        }
         return <UserAccessManager />;
       default:
         return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;

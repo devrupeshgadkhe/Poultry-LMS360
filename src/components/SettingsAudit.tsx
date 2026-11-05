@@ -54,6 +54,7 @@ interface UserOperator {
   FullName: string;
   IsActive: number;
   Permissions: string;
+  FarmId?: number;
 }
 
 interface AuditLog {
@@ -230,9 +231,14 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
       }
 
       // 2. Fetch users
+      const token = localStorage.getItem('token') || '';
       const usersRes = await fetch('/api/users', {
         headers: {
-          'x-farm-id': String(targetFarmId)
+          'Authorization': `Bearer ${token}`,
+          'X-User-Role': myRole,
+          'X-Farm-Id': String(targetFarmId),
+          'X-User-Email': localStorage.getItem('userEmail') || '',
+          'X-User-Name': localStorage.getItem('userName') || ''
         }
       });
       if (usersRes.ok) {
@@ -240,8 +246,10 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
         setUsers(data);
       }
 
-      // 3. Fetch logs
-      fetchAuditLogs(targetFarmId);
+      // 3. Fetch audit logs strictly for Developer login only
+      if (myRole === 'Developer') {
+        fetchAuditLogs(targetFarmId);
+      }
     } catch (e) {
       console.error('Failed to load settings module dependencies:', e);
     } finally {
@@ -250,15 +258,19 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
   };
 
   const fetchAuditLogs = async (targetFarmId = selectedFarmId) => {
+    if (myRole !== 'Developer') return;
     setAuditLoading(true);
     try {
+      const token = localStorage.getItem('token') || '';
       const queryParams = new URLSearchParams({
         ...auditFilters,
         farmId: String(targetFarmId)
       }).toString();
       const logsRes = await fetch(`/api/audit_logs_filtered?${queryParams}`, {
         headers: {
-          'x-farm-id': String(targetFarmId)
+          'Authorization': `Bearer ${token}`,
+          'X-User-Role': myRole,
+          'X-Farm-Id': String(targetFarmId)
         }
       });
       if (logsRes.ok) {
@@ -896,108 +908,143 @@ export default function SettingsAudit({ currentLanguage = 'en' }: { currentLangu
             </div>
           </div>
 
-          <button
-            onClick={() => openUserForm(null)}
-            disabled={myRole === 'Worker'}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-mono font-bold tracking-wide flex items-center gap-2 smooth-hover cursor-pointer"
-            id="register-operator-btn"
-          >
-            <Plus className="h-4 w-4" />
-            Provision Operator Account
-          </button>
+          {(myRole === 'Developer' || myRole === 'Admin') && (
+            <button
+              onClick={() => openUserForm(null)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-mono font-bold tracking-wide flex items-center gap-2 smooth-hover cursor-pointer"
+              id="register-operator-btn"
+            >
+              <Plus className="h-4 w-4" />
+              Provision Operator Account
+            </button>
+          )}
         </div>
 
         {/* Existing users table */}
-        <div className="overflow-x-auto rounded-2xl border border-slate-150">
-          <table className="w-full text-left border-collapse font-sans">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-150 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                <th className="p-4">operator details</th>
-                <th className="p-4">username</th>
-                <th className="p-4">system role</th>
-                <th className="p-4">claims permissions</th>
-                <th className="p-4">status</th>
-                <th className="p-4 text-right">operation</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {users.map((user) => (
-                <tr key={user.Id} className="hover:bg-slate-50/50 smooth-hover">
-                  <td className="p-4">
-                    <div className="font-bold text-slate-850">{user.FullName}</div>
-                    <div className="text-[10px] text-slate-400 font-mono">{user.Email}</div>
-                  </td>
-                  <td className="p-4 font-mono font-semibold text-indigo-600">{user.Username}</td>
-                  <td className="p-4">
-                    <span className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-extrabold rounded-full font-mono ${
-                      user.Role === 'Developer'
-                        ? 'bg-rose-50 border border-rose-100 text-rose-600'
-                        : user.Role === 'Admin'
-                        ? 'bg-indigo-50 border border-indigo-100 text-indigo-600'
-                        : 'bg-slate-50 border border-slate-150 text-slate-600'
-                    }`}>
-                      {user.Role}
-                    </span>
-                  </td>
-                  <td className="p-4 max-w-sm truncate">
-                    {user.Permissions ? (
-                      <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded" title={user.Permissions}>
-                        {user.Permissions.split(',').length} Action Claims Assigned
-                      </span>
-                    ) : (
-                      <span className="text-slate-400 italic">No assigned permissions</span>
-                    )}
-                  </td>
-                  <td className="p-4">
-                    {user.IsActive === 1 ? (
-                      <span className="text-emerald-600 font-bold flex items-center gap-1.5 font-mono text-[11px]">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        Active
-                      </span>
-                    ) : (
-                      <span className="text-rose-500 font-bold flex items-center gap-1.5 font-mono text-[11px]">
-                        <span className="h-1.5 w-1.5 rounded-full bg-rose-400"></span>
-                        Revoked / Locked
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-4 text-right space-x-2">
-                    {(() => {
-                      const isPrivileged = user.Role === 'Developer' || user.Role === 'Admin';
-                      const canEdit = myRole === 'Developer' || (!isPrivileged && myRole === 'Admin');
-                      const canDelete = (myRole === 'Developer' || myRole === 'Admin') && !isPrivileged && user.Username !== 'admin' && user.Username !== 'developer';
+        {(() => {
+          const displayedUsers = users.filter((u) => {
+            if (myRole === 'Developer') return true;
 
-                      return (
-                        <>
-                          <button
-                            onClick={() => openUserForm(user)}
-                            disabled={!canEdit}
-                            className={`p-1.5 inline-block ${canEdit ? 'text-slate-400 hover:text-indigo-600 smooth-hover cursor-pointer' : 'text-slate-300 opacity-40 cursor-not-allowed'}`}
-                            title={canEdit ? "Edit Operator profile" : "Protected: Only Developer SuperAdmin can edit Admin/Developer profiles"}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteUser(user)}
-                            disabled={!canDelete}
-                            className={`p-1.5 inline-block ${canDelete ? 'text-slate-400 hover:text-rose-600 smooth-hover cursor-pointer' : 'text-slate-300 opacity-40 cursor-not-allowed'}`}
-                            title={canDelete ? "De-register operator account" : "Protected: Cannot de-register Admin/Developer accounts"}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </>
-                      );
-                    })()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            // Never show Developer login or root Administration login to any individual farm
+            const isDevLogin =
+              u.Role === 'Developer' ||
+              u.Username?.toLowerCase() === 'developer' ||
+              u.Email?.toLowerCase() === 'dev@poultrylms.com' ||
+              Number(u.Id) === 2;
+
+            const isRootAdminLogin =
+              u.Username?.toLowerCase() === 'admin' ||
+              u.Email?.toLowerCase() === 'admin@poultrylms.com' ||
+              Number(u.Id) === 1;
+
+            if (isDevLogin || isRootAdminLogin) return false;
+
+            // If Employee / Staff / Worker (not Admin): user can see their details only
+            if (myRole !== 'Admin') {
+              const myEmail = (localStorage.getItem('userEmail') || '').toLowerCase().trim();
+              const myUsername = (localStorage.getItem('userName') || '').toLowerCase().trim();
+              const isSelf = (u.Email && u.Email.toLowerCase().trim() === myEmail) ||
+                             (u.Username && u.Username.toLowerCase().trim() === myUsername);
+              return isSelf;
+            }
+
+            // If Farm Admin: can see all the users of that particular farm only
+            return Number(u.FarmId || 1) === Number(selectedFarmId);
+          });
+
+          return (
+            <div className="overflow-x-auto rounded-2xl border border-slate-150">
+              <table className="w-full text-left border-collapse font-sans">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-150 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                    <th className="p-4">operator details</th>
+                    <th className="p-4">username</th>
+                    <th className="p-4">system role</th>
+                    <th className="p-4">claims permissions</th>
+                    <th className="p-4">status</th>
+                    <th className="p-4 text-right">operation</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs">
+                  {displayedUsers.map((user) => (
+                    <tr key={user.Id} className="hover:bg-slate-50/50 smooth-hover">
+                      <td className="p-4">
+                        <div className="font-bold text-slate-850">{user.FullName}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">{user.Email}</div>
+                      </td>
+                      <td className="p-4 font-mono font-semibold text-indigo-600">{user.Username}</td>
+                      <td className="p-4">
+                        <span className={`px-2.5 py-1 text-[10px] uppercase tracking-wider font-extrabold rounded-full font-mono ${
+                          user.Role === 'Developer'
+                            ? 'bg-rose-50 border border-rose-100 text-rose-600'
+                            : user.Role === 'Admin'
+                            ? 'bg-indigo-50 border border-indigo-100 text-indigo-600'
+                            : 'bg-slate-50 border border-slate-150 text-slate-600'
+                        }`}>
+                          {user.Role}
+                        </span>
+                      </td>
+                      <td className="p-4 max-w-sm truncate">
+                        {user.Permissions ? (
+                          <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded" title={user.Permissions}>
+                            {user.Permissions.split(',').length} Action Claims Assigned
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic">No assigned permissions</span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        {user.IsActive === 1 ? (
+                          <span className="text-emerald-600 font-bold flex items-center gap-1.5 font-mono text-[11px]">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                            Active
+                          </span>
+                        ) : (
+                          <span className="text-rose-500 font-bold flex items-center gap-1.5 font-mono text-[11px]">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-400"></span>
+                            Revoked / Locked
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4 text-right space-x-2">
+                        {(() => {
+                          const isPrivileged = user.Role === 'Developer' || user.Role === 'Admin';
+                          const canEdit = myRole === 'Developer' || (!isPrivileged && myRole === 'Admin');
+                          const canDelete = (myRole === 'Developer' || myRole === 'Admin') && !isPrivileged && user.Username !== 'admin' && user.Username !== 'developer';
+
+                          return (
+                            <>
+                              <button
+                                onClick={() => openUserForm(user)}
+                                disabled={!canEdit}
+                                className={`p-1.5 inline-block ${canEdit ? 'text-slate-400 hover:text-indigo-600 smooth-hover cursor-pointer' : 'text-slate-300 opacity-40 cursor-not-allowed'}`}
+                                title={canEdit ? "Edit Operator profile" : "Protected: Only Developer SuperAdmin can edit Admin/Developer profiles"}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteUser(user)}
+                                disabled={!canDelete}
+                                className={`p-1.5 inline-block ${canDelete ? 'text-slate-400 hover:text-rose-600 smooth-hover cursor-pointer' : 'text-slate-300 opacity-40 cursor-not-allowed'}`}
+                                title={canDelete ? "De-register operator account" : "Protected: Cannot de-register Admin/Developer accounts"}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          );
+                        })()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
       </div>
 
-      {/* Operator Audit Activity Logger Filter Block */}
-      {(myRole === 'Developer' || myRole === 'Admin') && (
+      {/* Operator Audit Activity Logger Filter Block - Strictly Developer Login Only */}
+      {myRole === 'Developer' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 smooth-shadow space-y-6" id="physical-system-audit-trails-block">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
           <div className="flex items-center gap-3">
