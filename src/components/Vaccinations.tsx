@@ -5,6 +5,28 @@ import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { vaccinationService, flockService } from '../lib/dataService';
 
+const formatDateDDMMYYYY = (dateStr: string | null | undefined): string => {
+  if (!dateStr) return '';
+  const clean = String(dateStr).split('T')[0].trim();
+  const parts = clean.split('-');
+  if (parts.length === 3) {
+    if (parts[0].length === 4) {
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+    if (parts[2].length === 4) {
+      return clean;
+    }
+  }
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) {
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}-${month}-${year}`;
+  }
+  return clean;
+};
+
 export default function Vaccinations({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
   const t = translations[currentLanguage];
   const { currentFarm } = useFarm();
@@ -110,11 +132,15 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
       };
 
       try {
-        await vaccinationService.createVaccination(farmId, payload);
+        if (editingVaccineId) {
+          await vaccinationService.updateVaccination(farmId, editingVaccineId, payload);
+        } else {
+          await vaccinationService.createVaccination(farmId, payload);
+        }
         cancelForm();
         fetchVaccines();
       } catch (cloudErr: any) {
-        console.error('Supabase createVaccination error, fallback to local:', cloudErr);
+        console.error('Supabase save vaccination error, fallback to local:', cloudErr);
         const url = editingVaccineId ? `/api/vaccinations/${editingVaccineId}` : '/api/vaccinations';
         const method = editingVaccineId ? 'PUT' : 'POST';
 
@@ -439,7 +465,7 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
                     return (
                       <tr key={v.Id} className={`smooth-hover ${alertActive ? 'bg-red-50/40 hover:bg-red-50/80' : 'hover:bg-slate-50/50'}`} id={`vac-row-${v.Id}`}>
                         <td className="px-5 py-3.5 font-mono text-xs font-semibold text-slate-700">
-                          {(v.Date || '').split('T')[0]}
+                          {formatDateDDMMYYYY(v.Date)}
                         </td>
                         <td className="px-5 py-3.5 font-semibold text-slate-800">{v.FlockName}</td>
                         <td className="px-5 py-3.5">
@@ -448,7 +474,7 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
                           {v.Phase === 'Scheduled' && v.ScheduledDate && (
                             <div className="text-[10px] text-slate-500 mt-1 font-semibold flex items-center gap-1">
                               <Clock className="h-3 w-3 text-slate-400" />
-                              Scheduled: <b className={`${alertActive ? 'text-red-650' : 'text-slate-600'}`}>{(v.ScheduledDate || '').split('T')[0]}</b>
+                              Scheduled: <b className={`${alertActive ? 'text-red-650' : 'text-slate-600'}`}>{formatDateDDMMYYYY(v.ScheduledDate)}</b>
                             </div>
                           )}
                         </td>

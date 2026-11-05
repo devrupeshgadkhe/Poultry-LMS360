@@ -862,7 +862,7 @@ export const vaccinationService = {
   async getVaccinations(farmId: number, flockId?: number): Promise<Vaccination[]> {
     let query = supabase
       .from('Vaccinations')
-      .select('*')
+      .select('*, Flocks(FlockName)')
       .eq('FarmId', farmId)
       .order('Date', { ascending: false });
 
@@ -873,9 +873,18 @@ export const vaccinationService = {
     const { data, error } = await query;
     if (error) {
       console.error('[vaccinationService.getVaccinations] Error:', error.message);
-      throw error;
+      // Fallback query without join
+      const { data: fallbackData } = await supabase
+        .from('Vaccinations')
+        .select('*')
+        .eq('FarmId', farmId)
+        .order('Date', { ascending: false });
+      return fallbackData || [];
     }
-    return data || [];
+    return (data || []).map((v: any) => ({
+      ...v,
+      FlockName: v.Flocks?.FlockName || v.FlockName || `Flock #${v.FlockId}`
+    }));
   },
 
   /**
@@ -925,22 +934,96 @@ export const vaccinationService = {
     }
 
     // Cascade update TotalVaccineCost in Flock
-    if (cost > 0 && flockId) {
-      const { data: flock } = await supabase
-        .from('Flocks')
-        .select('TotalVaccineCost')
-        .eq('Id', flockId)
-        .eq('FarmId', farmId)
-        .single();
+    if (flockId) {
+      const { data: allVacForFlock } = await supabase
+        .from('Vaccinations')
+        .select('Cost')
+        .eq('FlockId', flockId)
+        .eq('FarmId', farmId);
 
-      if (flock) {
-        const newCost = (Number(flock.TotalVaccineCost) || 0) + cost;
-        await supabase
-          .from('Flocks')
-          .update({ TotalVaccineCost: newCost })
-          .eq('Id', flockId)
-          .eq('FarmId', farmId);
-      }
+      const sumCost = (allVacForFlock || []).reduce((acc: number, item: any) => acc + (Number(item.Cost) || 0), 0);
+      await supabase
+        .from('Flocks')
+        .update({ TotalVaccineCost: sumCost })
+        .eq('Id', flockId)
+        .eq('FarmId', farmId);
+    }
+
+    return data;
+  },
+
+  /**
+   * Update an existing vaccination record and recalculate flock TotalVaccineCost
+   */
+  async updateVaccination(farmId: number, vId: number, vData: Partial<Vaccination>): Promise<Vaccination> {
+    const cost = Number(vData.Cost) || 0;
+    const flockId = Number(vData.FlockId);
+
+    // Fetch existing record to check if FlockId was altered
+    const { data: oldVac } = await supabase
+      .from('Vaccinations')
+      .select('*')
+      .eq('Id', vId)
+      .eq('FarmId', farmId)
+      .single();
+
+    const payload: any = {
+      VaccineName: vData.VaccineName || 'Standard Vaccine',
+      Date: vData.Date || new Date().toISOString().split('T')[0],
+      Cost: cost,
+      AdministeredBy: vData.AdministeredBy || '',
+      Notes: vData.Notes || '',
+      Phase: vData.Phase || 'Administered',
+      ScheduledDate: vData.ScheduledDate || null
+    };
+    if (flockId) {
+      payload.FlockId = flockId;
+    }
+
+    const { data, error } = await supabase
+      .from('Vaccinations')
+      .update(payload)
+      .eq('Id', vId)
+      .eq('FarmId', farmId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[vaccinationService.updateVaccination] Error:', error.message);
+      throw error;
+    }
+
+    // Recalculate TotalVaccineCost for the current flock
+    const targetFlockId = flockId || (oldVac ? oldVac.FlockId : null);
+    if (targetFlockId) {
+      const { data: currentVacList } = await supabase
+        .from('Vaccinations')
+        .select('Cost')
+        .eq('FlockId', targetFlockId)
+        .eq('FarmId', farmId);
+
+      const sumCost = (currentVacList || []).reduce((acc: number, item: any) => acc + (Number(item.Cost) || 0), 0);
+      await supabase
+        .from('Flocks')
+        .update({ TotalVaccineCost: sumCost })
+        .eq('Id', targetFlockId)
+        .eq('FarmId', farmId);
+    }
+
+    // If flock was changed, also recalculate the old flock's vaccine cost
+    if (oldVac && oldVac.FlockId && oldVac.FlockId !== flockId) {
+      const { data: oldVacList } = await supabase
+        .from('Vaccinations')
+        .select('Cost')
+        .eq('FlockId', oldVac.FlockId)
+        .eq('FarmId', farmId);
+
+      const oldSumCost = (oldVacList || []).reduce((acc: number, item: any) => acc + (Number(item.Cost) || 0), 0);
+      await supabase
+        .from('Flocks')
+        .update({ TotalVaccineCost: oldSumCost })
+        .eq('Id', oldVac.FlockId)
+        .eq('FarmId', farmId);
     }
 
     return data;
@@ -950,6 +1033,13 @@ export const vaccinationService = {
    * Delete a vaccination record
    */
   async deleteVaccination(farmId: number, vId: number): Promise<void> {
+    // Fetch old record before deletion to adjust flock TotalVaccineCost
+    const { data: oldVac } = await supabase
+      .from('Vaccinations')
+      .select('FlockId, FarmId')
+      .eq('Id', vId)
+      .single();
+
     const { error } = await supabase
       .from('Vaccinations')
       .delete()
@@ -959,6 +1049,22 @@ export const vaccinationService = {
     if (error) {
       console.error('[vaccinationService.deleteVaccination] Error:', error.message);
       throw error;
+    }
+
+    // Recalculate flock TotalVaccineCost
+    if (oldVac && oldVac.FlockId) {
+      const { data: remainingVac } = await supabase
+        .from('Vaccinations')
+        .select('Cost')
+        .eq('FlockId', oldVac.FlockId)
+        .eq('FarmId', farmId);
+
+      const sumCost = (remainingVac || []).reduce((acc: number, item: any) => acc + (Number(item.Cost) || 0), 0);
+      await supabase
+        .from('Flocks')
+        .update({ TotalVaccineCost: sumCost })
+        .eq('Id', oldVac.FlockId)
+        .eq('FarmId', farmId);
     }
   }
 };

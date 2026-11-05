@@ -58,4 +58,8 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
   - Fixed zero Egg Laying Rate (Hen-Day Production / HDP %) and zero Egg Production Cost for newly created/re-entered batches (such as Batch 6 / `B6-Batch6`) by creating an automated flock log linker and seed mechanism (`autoSeedFlockLogsIfMissing`) in `server/controllers.ts`.
   - Dynamically calculates active laying days count, live bird headcount deduction (mortality + personal consumption), accrued feed cost, and net flock outlay across all flocks.
   - Standardized all dates displayed on the Flocks page strictly to `DD-MM-YYYY` format (e.g., `08-05-2025`), ensuring unified date presentation across all flock cards and badges.
+- **Medicines & Vaccines (Healthcare) Edit Fix & DD-MM-YYYY Date Standardization**:
+  - Resolved edit bug where editing an existing vaccination record inserted a new duplicate record instead of updating the existing one.
+  - Implemented `vaccinationService.updateVaccination()` in `src/lib/dataService.ts` targeting the specific vaccination ID with automated recalculation of `TotalVaccineCost` in `Flocks` table for both the current flock and previous flock (if altered).
+  - Formatted all dates displayed in the Medicines & Vaccines module strictly to `DD-MM-YYYY` format (Log Date and Scheduled Target Date).
 

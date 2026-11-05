@@ -51,4 +51,8 @@
   - Resolved `ReferenceError: logs is not defined` in `src/lib/dataService.ts` to ensure flock metrics load reliably without errors.
   - Fixed zero Egg Laying Rate (`HDP %`) and zero Egg Production Cost (`PerEggCost`) for newly created and re-entered flocks (specifically Batch 6 / `B6-Batch6`) by introducing `autoSeedFlockLogsIfMissing` in `server/controllers.ts`.
   - Unified date presentation across the Flocks page: all dates (arrival date, launch date, etc.) are strictly formatted in `DD-MM-YYYY` format only.
+- **v1.0.14**:
+  - Fixed Medicines & Vaccines (Immunization) editing bug where updating an existing vaccination record inserted a duplicate instead of updating the target row.
+  - Added `vaccinationService.updateVaccination()` method with flock vaccine cost auto-recalculation.
+  - Formatted all displayed dates in the Medicines & Vaccines module strictly as `DD-MM-YYYY`.
 
