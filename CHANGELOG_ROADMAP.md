@@ -62,4 +62,10 @@
     - Farm Administrators can see all users belonging to their specific farm only.
     - Developer logins and root Administration logins are completely invisible to any individual farm and its users.
   - Enforced dual-layer security across both backend controllers (`/api/users`, `/api/audit_logs_filtered`, `/api/audit_logs`) and frontend components (`SettingsAudit.tsx`, `UserAccessManager.tsx`, and `App.tsx`).
+- **v1.0.16**:
+  - Introduced AI Multimodal Purchase Bill Scanner in Poultry Purchase Ledger (`Purchasing.tsx`).
+  - Added Multi-Key Rotation Pool Manager (`server/keyPool.ts`) supporting automatic discovery of multiple Gemini API keys and cooldown handling for 429 quota exhaustion.
+  - Added Multi-Model Rotation Fallback Chain (`gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-3.5-flash`, `gemini-flash-latest`) for zero-downtime parsing.
+  - Added `InvoiceUploadModal.tsx` supporting photo uploads, camera captures, and distributor PDFs (up to 50MB) with auto-population of Supplier, Bill Number, Date, Line Items, Rates, and Taxes.
+  - Added dynamic button visibility driven by quota probe (`GET /api/ai/quota-status`) to prevent broken user workflows when quota is exhausted.
 

@@ -18,12 +18,15 @@ import {
   RotateCcw, 
   ChevronDown, 
   ChevronUp, 
-  BadgeIndianRupee 
+  BadgeIndianRupee,
+  Sparkles,
+  Camera
 } from 'lucide-react';
 import { Supplier, Inventory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { purchaseService, stakeholderService, inventoryService } from '../lib/dataService';
+import { InvoiceUploadModal } from './InvoiceUploadModal';
 
 interface PurchaseItem {
   InventoryId: string;
@@ -115,6 +118,127 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
   const [returnDate, setReturnDate] = useState(new Date().toISOString().split('T')[0]);
   const [returnNotes, setReturnNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // AI Multimodal Invoice Scanner states
+  const [isAiScanModalOpen, setIsAiScanModalOpen] = useState(false);
+  const [isAiScanAvailable, setIsAiScanAvailable] = useState(false);
+  const [aiScanSuccessBanner, setAiScanSuccessBanner] = useState<string | null>(null);
+
+  // Probe quota status on mount to dynamically show/hide the AI Bill Scan button
+  useEffect(() => {
+    let active = true;
+    fetch('/api/ai/quota-status', {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+      }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (active) {
+          setIsAiScanAvailable(Boolean(data && data.available === true));
+        }
+      })
+      .catch(() => {
+        if (active) setIsAiScanAvailable(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  const handleInvoiceParsed = (scanned: any) => {
+    try {
+      setIsAiScanModalOpen(false);
+      setEditPurchaseId(null);
+      setShowAddForm(true);
+
+      // 1. Match or populate Supplier:
+      const scannedSupplierName = (scanned.supplierName || '').trim();
+      const scannedGstin = (scanned.supplierGstin || '').trim().toUpperCase();
+      const scannedPhone = (scanned.supplierPhone || '').trim();
+
+      const matchedSupplier = suppliers.find(s => {
+        const comp = (s.CompanyName || '').toLowerCase();
+        const contact = (s.ContactPerson || '').toLowerCase();
+        const addr = (s.Address || '').toLowerCase();
+        const scanName = scannedSupplierName.toLowerCase();
+
+        if (scannedGstin && addr.includes(scannedGstin.toLowerCase())) return true;
+        if (scanName && (comp === scanName || comp.includes(scanName) || scanName.includes(comp))) return true;
+        if (scanName && (contact === scanName || contact.includes(scanName) || scanName.includes(contact))) return true;
+        if (scannedPhone && s.Phone && s.Phone.includes(scannedPhone)) return true;
+        return false;
+      });
+
+      if (matchedSupplier) {
+        setSupplierId(String(matchedSupplier.Id));
+        setSupplierSearchQuery(matchedSupplier.CompanyName || matchedSupplier.ContactPerson || '');
+      } else if (scannedSupplierName) {
+        setSupplierSearchQuery(scannedSupplierName);
+        setQuickSupplierName(scannedSupplierName);
+        setQuickSupplierPhone(scannedPhone);
+        setQuickSupplierContact(scanned.supplierAddress || '');
+      }
+
+      // 2. Set Invoice Header Fields:
+      if (scanned.invoiceNumber) {
+        setInvoiceNumber(scanned.invoiceNumber);
+      }
+      if (scanned.invoiceDate) {
+        setPurchaseDate(scanned.invoiceDate);
+      }
+
+      const noteDetails: string[] = [];
+      if (scanned.supplierGstin) noteDetails.push(`GSTIN: ${scanned.supplierGstin}`);
+      if (scanned.supplierAddress) noteDetails.push(`Address: ${scanned.supplierAddress}`);
+      if (scanned.taxAmount) noteDetails.push(`Tax: ₹${scanned.taxAmount}`);
+      if (scanned.grandTotal) noteDetails.push(`Bill Total: ₹${scanned.grandTotal}`);
+      if (noteDetails.length > 0) {
+        setNotes((prev) => (prev ? `${prev}\n[AI Scan] ${noteDetails.join(' | ')}` : `[AI Scan] ${noteDetails.join(' | ')}`));
+      }
+
+      // 3. Map Line Items:
+      if (scanned.items && Array.isArray(scanned.items) && scanned.items.length > 0) {
+        const newItems: PurchaseItem[] = [];
+        const newRowSearch: { [key: number]: string } = {};
+
+        scanned.items.forEach((item: any, idx: number) => {
+          const itemName = (item.name || '').trim();
+          const matchedInv = inventories.find(inv => {
+            const iName = inv.ItemName.toLowerCase();
+            const sName = itemName.toLowerCase();
+            return iName === sName || iName.includes(sName) || sName.includes(iName);
+          });
+
+          newItems.push({
+            InventoryId: matchedInv ? String(matchedInv.Id) : '',
+            ItemType: 'Inventory',
+            Quantity: Number(item.quantity) > 0 ? Number(item.quantity) : 1,
+            UnitPrice: Number(item.rate) >= 0 ? Number(item.rate) : 0,
+            GSTPercentage: Number(item.gstRate) >= 0 ? Number(item.gstRate) : 0,
+            WeightPerUnit: 1,
+            DiscountPercentage: Number(item.discount) >= 0 ? Number(item.discount) : 0
+          });
+
+          newRowSearch[idx] = matchedInv ? matchedInv.ItemName : itemName;
+        });
+
+        setItems(newItems);
+        setRowSearchQueries(newRowSearch);
+      }
+
+      setAiScanSuccessBanner(
+        `AI successfully scanned bill "${scanned.invoiceNumber || 'Invoice'}" from "${scanned.supplierName || 'Vendor'}" with ${scanned.items?.length || 0} line item(s). Please review before saving.`
+      );
+      setTimeout(() => setAiScanSuccessBanner(null), 10000);
+
+      // Smooth scroll to form
+      setTimeout(() => {
+        const formEl = document.getElementById('add-purchase-form');
+        if (formEl) formEl.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    } catch (err: any) {
+      console.error('Error auto-populating parsed invoice:', err);
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -705,7 +829,19 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
             Standard-billing style panel to register purchases, allocate delivery overheads via landed-cost metrics, log supplier returns, and track accounts outstanding.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap items-center">
+          {isAiScanAvailable && (
+            <button
+              type="button"
+              onClick={() => setIsAiScanModalOpen(true)}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white smooth-hover shadow-md shadow-emerald-600/15 shrink-0 cursor-pointer"
+              id="ai-bill-scan-btn"
+              title="Scan purchase bill photo or PDF with AI multimodal OCR"
+            >
+              <Sparkles className="h-4 w-4 shrink-0 text-emerald-200" />
+              <span>AI Bill Scan (Photo / PDF)</span>
+            </button>
+          )}
           <button
             onClick={() => {
               setEditPurchaseId(null);
@@ -761,6 +897,23 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
         </div>
       </div>
 
+      {/* AI Scan Success Notification Banner */}
+      {aiScanSuccessBanner && (
+        <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl flex items-center justify-between text-xs font-medium shadow-xs animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{aiScanSuccessBanner}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAiScanSuccessBanner(null)}
+            className="text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Main adding/editing form (BILLING-STYLE COMPACT POS GRID) */}
       {showAddForm && (
         <form onSubmit={handleSubmit} className="space-y-6" id="add-purchase-form">
@@ -775,9 +928,22 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
                     {editPurchaseId ? `Purchase Invoice Correction (Bill #${editPurchaseId})` : 'Purchase Invoicing Sheet'}
                   </h3>
                 </div>
-                <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
-                  <span>Active POS Session</span>
+                <div className="flex items-center gap-2">
+                  {isAiScanAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => setIsAiScanModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      title="Upload or scan bill image/PDF to auto-populate form"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Auto-Fill with AI Scan</span>
+                    </button>
+                  )}
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span>Active POS Session</span>
+                  </div>
                 </div>
               </div>
 
@@ -2344,6 +2510,16 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
             </form>
           </div>
         </div>
+      )}
+
+      {/* AI Purchase Bill Scanner Modal */}
+      {isAiScanModalOpen && (
+        <InvoiceUploadModal
+          isOpen={isAiScanModalOpen}
+          onClose={() => setIsAiScanModalOpen(false)}
+          onSuccess={handleInvoiceParsed}
+          onQuotaExceeded={() => setIsAiScanAvailable(false)}
+        />
       )}
     </div>
   );

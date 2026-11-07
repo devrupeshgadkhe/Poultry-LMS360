@@ -66,4 +66,11 @@ Poultry LMS 360 Enterprise ERP is a multi-platform operational management system
     - Farm Administrators can see all users belonging to their specific farm only.
     - Developer logins and root Administration logins are completely invisible to any individual farm or its users.
   - Applied dual-layer security across backend APIs (`/api/users`, `/api/audit_logs_filtered`, `/api/audit_logs`) and frontend views (`SettingsAudit.tsx`, `UserAccessManager.tsx`, and `App.tsx`).
+- **AI Purchase Bill Scanner (Multimodal OCR for Photo & PDF Invoices)**:
+  - Integrated Gemini multimodal vision OCR for paper purchase receipts, handwritten bills, and distributor PDFs without external OCR dependencies.
+  - Multi-Key Rotation Pool (`server/keyPool.ts`): Automatically discovers and rotates across multiple API keys (`GEMINI_API_KEY`, `GEMINI_API_KEYS`, `GEMINI_API_KEY_1..N`) with automated 429 quota cooldown and quarantine.
+  - Multi-Model Rotation Fallback Chain: Automatically fails over across `gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-3.5-flash`, and `gemini-flash-latest` for zero-downtime bill processing.
+  - Master Indian GST Prompt & Schema (`server/aiSchemas.ts`): Extracts Supplier details (Name, GSTIN, Phone, Address), Invoice/Bill number, standardized date (YYYY-MM-DD), and line items (Item Name in English/Marathi/Hindi, HSN, Quantity, Unit, Unit Rate, Discount, exact GST % or 0% for non-tax slips, and Totals).
+  - Backend Endpoints: `GET /api/ai/quota-status` (1-token health verification) and `POST /api/ai/parse-invoice`.
+  - Frontend: `src/components/InvoiceUploadModal.tsx` and auto-population in `src/components/Purchasing.tsx` mapping to Supplier, Invoice No, Date, and Line Items with full review before saving.
 

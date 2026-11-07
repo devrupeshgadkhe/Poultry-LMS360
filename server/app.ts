@@ -25,6 +25,7 @@ import { backupControllers } from './backups.js';
 import { settingsControllers, userManagementControllers } from './settingsControllers.js';
 import { bulkImportControllers } from './bulkImportControllers.js';
 import { migrationControllers } from './migrationControllers.js';
+import { aiControllers } from './aiControllers.js';
 import { supabaseServer } from './supabase.js';
 import { getSupabaseFarms, createSupabaseFarm, syncSupabaseToLocal, syncAllTablesBidirectional, reconcileAllFlocksInventory } from './supabase.js';
 
@@ -509,6 +510,10 @@ apiRouter.post('/farms', async (req, res) => {
 // 14. Bulk Data Import Modules
 apiRouter.post('/bulk-import/parse', bulkImportControllers.parseImportData);
 apiRouter.post('/bulk-import/commit', bulkImportControllers.commitImportData);
+
+// 15. AI Invoice OCR & Multimodal Intelligence
+apiRouter.get('/ai/quota-status', aiControllers.getQuotaStatus);
+apiRouter.post('/ai/parse-invoice', aiControllers.parseInvoice);
 
 // Mount router on BOTH /api and root (/) for seamless Vercel and Express path matching
 app.use('/api', apiRouter);
