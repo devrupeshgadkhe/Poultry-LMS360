@@ -4,6 +4,7 @@ import { Vaccination, Flock } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { vaccinationService, flockService } from '../lib/dataService';
+import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
 
 const formatDateDDMMYYYY = (dateStr: string | null | undefined): string => {
   if (!dateStr) return '';
@@ -37,6 +38,12 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingVaccineId, setEditingVaccineId] = useState<number | null>(null);
+
+  // RBAC granular claims
+  const canCreate = hasPermission('health.create');
+  const canEdit = hasPermission('health.edit');
+  const canDelete = hasPermission('health.delete');
+  const canReset = isSuperOrAdmin();
 
   const [newVaccine, setNewVaccine] = useState({
     FlockId: '',
@@ -116,6 +123,15 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
     if (isSubmitting) return;
     if (!newVaccine.FlockId) return alert('Please select a flock.');
     
+    if (editingVaccineId && !canEdit) {
+      alert('Permission Denied: Your operator account does not have authorization to edit vaccinations (health.edit).');
+      return;
+    }
+    if (!editingVaccineId && !canCreate) {
+      alert('Permission Denied: Your operator account does not have authorization to log vaccinations (health.create).');
+      return;
+    }
+
     // Validate if Phase is Scheduled, we must have a Scheduled Date
     if (newVaccine.Phase === 'Scheduled' && !newVaccine.ScheduledDate) {
       alert('Please specify a scheduled target date.');
@@ -168,6 +184,10 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
   };
 
   const startEditVaccine = (v: any) => {
+    if (!canEdit) {
+      alert('Permission Denied: Your operator account does not have authorization to edit vaccinations (health.edit).');
+      return;
+    }
     setEditingVaccineId(v.Id);
     setNewVaccine({
       FlockId: String(v.FlockId),
@@ -198,6 +218,10 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
   };
 
   const deleteVaccine = async (id: number) => {
+    if (!canDelete) {
+      alert('Permission Denied: Your operator account does not have authorization to delete vaccinations (health.delete).');
+      return;
+    }
     if (!confirm('Are you sure you want to delete this vaccination schedule record?')) return;
     try {
       try {
@@ -242,35 +266,37 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
         </div>
         
         <div className="flex items-center gap-2">
-          <button
-            onClick={async () => {
-              if (window.confirm("⚠️ Hard Reset Form (Vaccinations): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
-                try {
-                  const res = await fetch('/api/developer/form-hard-reset', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ formKey: 'vaccinations', farmId })
-                  });
-                  const data = await res.json();
-                  if (data.success) {
-                    alert(data.message || 'Vaccinations reset successfully!');
-                    window.dispatchEvent(new Event('farm-data-updated'));
-                    fetchVaccines();
-                    fetchFlocks();
-                  } else {
-                    alert(data.error || 'Failed to reset form');
+          {canReset && (
+            <button
+              onClick={async () => {
+                if (window.confirm("⚠️ Hard Reset Form (Vaccinations): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
+                  try {
+                    const res = await fetch('/api/developer/form-hard-reset', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ formKey: 'vaccinations', farmId })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      alert(data.message || 'Vaccinations reset successfully!');
+                      window.dispatchEvent(new Event('farm-data-updated'));
+                      fetchVaccines();
+                      fetchFlocks();
+                    } else {
+                      alert(data.error || 'Failed to reset form');
+                    }
+                  } catch (err: any) {
+                    alert(err.message || 'Error executing form reset');
                   }
-                } catch (err: any) {
-                  alert(err.message || 'Error executing form reset');
                 }
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
-            title="Hard Reset this form (Clear records, reset amounts to 0)"
-          >
-            <RotateCcw className="h-4 w-4 shrink-0" />
-            <span className="hidden sm:inline">Form Reset</span>
-          </button>
+              }}
+              className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
+              title="Hard Reset this form (Clear records, reset amounts to 0)"
+            >
+              <RotateCcw className="h-4 w-4 shrink-0" />
+              <span className="hidden sm:inline">Form Reset</span>
+            </button>
+          )}
           {activeAlertCount > 0 && (
             <div className="px-3 py-1 bg-red-50 border border-red-200 text-red-700 text-xs font-bold rounded-lg animate-pulse flex items-center gap-1">
               <ShieldAlert className="h-3.5 w-3.5 text-red-600 animate-bounce" />
@@ -278,20 +304,22 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
             </div>
           )}
           
-          <button
-            onClick={() => {
-              if (showAddForm) {
-                cancelForm();
-              } else {
-                setShowAddForm(true);
-              }
-            }}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs sm:text-sm font-semibold smooth-hover shadow-xs shrink-0 self-start sm:self-center"
-            id="toggle-add-vac-btn"
-          >
-            <Plus className="h-4 w-4 shrink-0" />
-            {editingVaccineId ? 'Editing Record' : t.logVaccineBtn}
-          </button>
+          {(canCreate || (editingVaccineId && canEdit)) && (
+            <button
+              onClick={() => {
+                if (showAddForm) {
+                  cancelForm();
+                } else {
+                  setShowAddForm(true);
+                }
+              }}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs sm:text-sm font-semibold smooth-hover shadow-xs shrink-0 self-start sm:self-center"
+              id="toggle-add-vac-btn"
+            >
+              <Plus className="h-4 w-4 shrink-0" />
+              {editingVaccineId ? 'Editing Record' : t.logVaccineBtn}
+            </button>
+          )}
         </div>
       </div>
 
@@ -509,22 +537,29 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
                         </td>
                         <td className="px-5 py-3.5 text-right">
                           <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => startEditVaccine(v)}
-                              className="p-1 px-2 border border-slate-200 hover:border-blue-200 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
-                              id={`edit-vac-btn-${v.Id}`}
-                            >
-                              <Edit2 className="h-3 w-3" />
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => deleteVaccine(v.Id)}
-                              className="p-1 px-2 border border-slate-200 hover:border-red-200 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
-                              id={`del-vac-btn-${v.Id}`}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                              Delete
-                            </button>
+                            {canEdit && (
+                              <button
+                                onClick={() => startEditVaccine(v)}
+                                className="p-1 px-2 border border-slate-200 hover:border-blue-200 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
+                                id={`edit-vac-btn-${v.Id}`}
+                              >
+                                <Edit2 className="h-3 w-3" />
+                                Edit
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button
+                                onClick={() => deleteVaccine(v.Id)}
+                                className="p-1 px-2 border border-slate-200 hover:border-red-200 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
+                                id={`del-vac-btn-${v.Id}`}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                Delete
+                              </button>
+                            )}
+                            {!canEdit && !canDelete && (
+                              <span className="text-[11px] text-slate-400 font-mono">View Only</span>
+                            )}
                           </div>
                         </td>
                       </tr>

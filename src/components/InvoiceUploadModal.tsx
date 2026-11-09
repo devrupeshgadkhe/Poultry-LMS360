@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Camera, X, RefreshCw, FileText, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Upload, Camera, X, RefreshCw, FileText, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
@@ -114,11 +114,11 @@ export const InvoiceUploadModal: React.FC<Props> = ({
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
             <span className="p-2 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100">
-              <Sparkles className="w-5 h-5 text-emerald-600" />
+              <FileText className="w-5 h-5 text-emerald-600" />
             </span>
             <div>
-              <h3 className="font-bold text-base text-slate-800 tracking-tight">AI Purchase Bill Scanner</h3>
-              <p className="text-[11px] text-slate-500">Multimodal OCR for handwritten receipts, GST bills & PDFs</p>
+              <h3 className="font-bold text-base text-slate-800 tracking-tight">Purchase Bill & Invoice Scanner</h3>
+              <p className="text-[11px] text-slate-500">Optical document scanner for handwritten receipts, GST bills & PDFs</p>
             </div>
           </div>
           <button
@@ -234,11 +234,11 @@ export const InvoiceUploadModal: React.FC<Props> = ({
             {isScanning ? (
               <>
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Analyzing Invoice with AI...</span>
+                <span>Scanning Invoice Document...</span>
               </>
             ) : (
               <>
-                <Sparkles className="w-3.5 h-3.5" />
+                <FileText className="w-3.5 h-3.5" />
                 <span>Extract & Auto-Fill Bill</span>
               </>
             )}

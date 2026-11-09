@@ -4,11 +4,18 @@ import { FinancialTransaction, TransactionCategory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { financeService, stakeholderService, flockService } from '../lib/dataService';
+import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
 
 export default function FinanceLedger({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
   const t = translations[currentLanguage];
   const { currentFarm } = useFarm();
   const farmId = currentFarm?.Id || 1;
+
+  // RBAC permissions
+  const canCreate = hasPermission('financials.create');
+  const canEdit = hasPermission('financials.edit');
+  const canDelete = hasPermission('financials.delete');
+  const canReset = isSuperOrAdmin();
 
   const [txs, setTxs] = useState<any[]>([]);
   const [categories, setCategories] = useState<TransactionCategory[]>([]);
@@ -168,6 +175,12 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   const handleSubmitTx = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    if (!canCreate) {
+      alert('Permission denied: You do not have permission to record ledger vouchers.');
+      return;
+    }
+
     if (!categoryId) return alert('Please select an account category');
 
     const numAmount = Number(amount);
@@ -217,6 +230,12 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   const handleUpdateTx = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    if (!canEdit) {
+      alert('Permission denied: You do not have permission to edit ledger vouchers.');
+      return;
+    }
+
     if (!categoryId) return alert('Select Category');
     if (!editingTxId) return;
 
@@ -259,6 +278,10 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   };
 
   const startEditTx = (tx: any) => {
+    if (!canEdit) {
+      alert('Permission denied: You do not have permission to edit ledger vouchers.');
+      return;
+    }
     setEditingTxId(tx.Id);
     setTxDate((tx.Date || '').split('T')[0]);
     setType(tx.Type);
@@ -275,6 +298,10 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   };
 
   const deleteTx = async (id: number) => {
+    if (!canDelete) {
+      alert('Permission denied: You do not have permission to delete ledger vouchers.');
+      return;
+    }
     if (!confirm('Are you absolutely sure you want to delete this financial ledger voucher entry? Outstanding debtor and supplier balance adjustments will be auto-rebalanced.')) return;
     try {
       await financeService.deleteTransaction(farmId, id);
@@ -304,6 +331,10 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+    if (!canCreate) {
+      alert('Permission denied: You do not have permission to create transaction categories.');
+      return;
+    }
     if (!newCatName) return;
     try {
       setIsSubmitting(true);
@@ -326,6 +357,10 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
 
   // Edit Dynamic Category
   const handleUpdateCategory = async (id: number) => {
+    if (!canEdit) {
+      alert('Permission denied: You do not have permission to update transaction categories.');
+      return;
+    }
     if (!editCatName) return;
     try {
       await financeService.updateCategory(farmId, id, {
@@ -344,6 +379,10 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
 
   // Delete Category
   const handleDeleteCategory = async (id: number) => {
+    if (!canDelete) {
+      alert('Permission denied: You do not have permission to delete transaction categories.');
+      return;
+    }
     if (!confirm('Are you sure you want to delete this transaction type / category?')) return;
     try {
       await financeService.deleteCategory(farmId, id);
@@ -421,52 +460,56 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
             <Tag className="h-4 w-4 text-indigo-500 shrink-0" />
             Manage Transaction Types
           </button>
-          <button
-            onClick={() => {
-              if (showAddForm) {
-                resetTxForm();
-                setShowAddForm(false);
-              } else {
-                resetTxForm();
-                setShowAddForm(true);
-              }
-            }}
-            className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs sm:text-sm font-semibold smooth-hover shadow-xs"
-            id="toggle-add-tx-btn"
-          >
-            <Plus className="h-4 w-4 shrink-0" />
-            {editingTxId ? 'Modify Voucher' : t.addTransactionBtn}
-          </button>
-          <button
-            onClick={async () => {
-              if (window.confirm('⚠️ Hard Reset Finance Form: Are you sure you want to delete all financial transactions and reset ledger amounts to zero? Other modules will remain untouched.')) {
-                try {
-                  const res = await fetch('/api/developer/form-hard-reset', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ formKey: 'finance', farmId })
-                  });
-                  const data = await res.json();
-                  if (data.success) {
-                    alert(data.message || 'Finance form reset successfully!');
-                    window.dispatchEvent(new Event('farm-data-updated'));
-                    fetchTx();
-                    fetchCategories();
-                    fetchAttributionOptions();
-                  } else {
-                    alert(data.error || 'Failed to reset form');
-                  }
-                } catch (err: any) {
-                  alert(err.message || 'Error executing form reset');
+          {(canCreate || editingTxId) && (
+            <button
+              onClick={() => {
+                if (showAddForm) {
+                  resetTxForm();
+                  setShowAddForm(false);
+                } else {
+                  resetTxForm();
+                  setShowAddForm(true);
                 }
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-xs transition"
-            title="Hard Reset this form (Clear transactions, reset amounts to 0)"
-          >
-            <RotateCcw className="h-4 w-4 shrink-0" />
-            <span className="hidden sm:inline">Form Reset</span>
-          </button>
+              }}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs sm:text-sm font-semibold smooth-hover shadow-xs"
+              id="toggle-add-tx-btn"
+            >
+              <Plus className="h-4 w-4 shrink-0" />
+              {editingTxId ? 'Modify Voucher' : t.addTransactionBtn}
+            </button>
+          )}
+          {canReset && (
+            <button
+              onClick={async () => {
+                if (window.confirm('⚠️ Hard Reset Finance Form: Are you sure you want to delete all financial transactions and reset ledger amounts to zero? Other modules will remain untouched.')) {
+                  try {
+                    const res = await fetch('/api/developer/form-hard-reset', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ formKey: 'finance', farmId })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      alert(data.message || 'Finance form reset successfully!');
+                      window.dispatchEvent(new Event('farm-data-updated'));
+                      fetchTx();
+                      fetchCategories();
+                      fetchAttributionOptions();
+                    } else {
+                      alert(data.error || 'Failed to reset form');
+                    }
+                  } catch (err: any) {
+                    alert(err.message || 'Error executing form reset');
+                  }
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs sm:text-sm font-semibold shadow-xs transition"
+              title="Hard Reset this form (Clear transactions, reset amounts to 0)"
+            >
+              <RotateCcw className="h-4 w-4 shrink-0" />
+              <span className="hidden sm:inline">Form Reset</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -562,13 +605,19 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
                 />
               </div>
 
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className={`w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold smooth-hover ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                {isSubmitting ? 'Adding...' : 'Add Transaction Type'}
-              </button>
+              {canCreate ? (
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className={`w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold smooth-hover ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {isSubmitting ? 'Adding...' : 'Add Transaction Type'}
+                </button>
+              ) : (
+                <div className="w-full py-2 text-center text-xs text-slate-400 font-semibold bg-slate-50 rounded-lg border border-dashed border-slate-200">
+                  Read-only: Creation restricted
+                </div>
+              )}
             </form>
 
             {/* Right side: Categories lists */}
@@ -640,20 +689,24 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
                           </>
                         ) : (
                           <>
-                            <button
-                              onClick={() => startEditCategory(c)}
-                              className="p-1 hover:bg-indigo-50 text-indigo-600 rounded"
-                              title="Edit Category Type"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteCategory(c.Id)}
-                              className="p-1 hover:bg-red-50 text-red-600 rounded"
-                              title="Delete Category Type"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                            {canEdit && (
+                              <button
+                                onClick={() => startEditCategory(c)}
+                                className="p-1 hover:bg-indigo-50 text-indigo-600 rounded"
+                                title="Edit Category Type"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button
+                                onClick={() => handleDeleteCategory(c.Id)}
+                                className="p-1 hover:bg-red-50 text-red-600 rounded"
+                                title="Delete Category Type"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           </>
                         )}
                       </div>
@@ -1043,22 +1096,31 @@ export default function FinanceLedger({ currentLanguage = 'en' }: { currentLangu
                         </td>
                         <td className="px-5 py-3.5 text-right font-sans text-xs">
                           <div className="flex items-center justify-end gap-1.5 ml-auto">
-                            <button
-                              onClick={() => startEditTx(tx)}
-                              className="p-1 px-2 border border-slate-200 hover:border-indigo-200 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg smooth-hover flex gap-1 items-center"
-                              id={`edit-tx-${tx.Id}`}
-                            >
-                              <Pencil className="h-3 w-3" />
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => deleteTx(tx.Id)}
-                              className="p-1 px-2 border border-slate-200 hover:border-red-200 text-slate-400 hover:text-red-700 hover:bg-rose-50/40 rounded-lg smooth-hover flex gap-1 items-center"
-                              id={`del-tx-${tx.Id}`}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                              Delete
-                            </button>
+                            {canEdit && (
+                              <button
+                                onClick={() => startEditTx(tx)}
+                                className="p-1 px-2 border border-slate-200 hover:border-indigo-200 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg smooth-hover flex gap-1 items-center"
+                                id={`edit-tx-${tx.Id}`}
+                              >
+                                <Pencil className="h-3 w-3" />
+                                Edit
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button
+                                onClick={() => deleteTx(tx.Id)}
+                                className="p-1 px-2 border border-slate-200 hover:border-red-200 text-slate-400 hover:text-red-700 hover:bg-rose-50/40 rounded-lg smooth-hover flex gap-1 items-center"
+                                id={`del-tx-${tx.Id}`}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                Delete
+                              </button>
+                            )}
+                            {!canEdit && !canDelete && (
+                              <span className="text-[11px] text-slate-400 font-medium px-2 py-1 bg-slate-100 rounded">
+                                View Only
+                              </span>
+                            )}
                           </div>
                         </td>
                       </tr>

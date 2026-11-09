@@ -26,6 +26,7 @@ import { Customer, Flock, EggInventory, Inventory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { salesService, stakeholderService, flockService, eggInventoryService, inventoryService, settingsService } from '../lib/dataService';
+import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
 
 interface CartItem {
   Id?: number;
@@ -53,6 +54,12 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
   const t = translations[currentLanguage];
   const { currentFarm } = useFarm();
   const farmId = currentFarm?.Id || 1;
+
+  // RBAC Permission checks
+  const canCreate = hasPermission('sales.create');
+  const canEdit = hasPermission('sales.edit');
+  const canDelete = hasPermission('sales.delete');
+  const canReset = isSuperOrAdmin();
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [flocks, setFlocks] = useState<Flock[]>([]);
@@ -189,6 +196,10 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
   };
 
   const handleNewSaleInit = () => {
+    if (!canCreate) {
+      alert('Permission denied: You do not have permission to create sales bills.');
+      return;
+    }
     setEditingSaleId(null);
     setOriginalSaleItems([]);
     setCustomerId('');
@@ -366,6 +377,16 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    if (editingSaleId && !canEdit) {
+      alert('Permission denied: You do not have permission to edit sales records.');
+      return;
+    }
+    if (!editingSaleId && !canCreate) {
+      alert('Permission denied: You do not have permission to create sales bills.');
+      return;
+    }
+
     if (!customerId) return alert('Please select a customer.');
     if (cart.length === 0) return alert('Select at least one billing item.');
 
@@ -512,6 +533,10 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
   };
 
   const handleEditSale = async (id: number) => {
+    if (!canEdit) {
+      alert('Permission denied: You do not have permission to edit sales records.');
+      return;
+    }
     try {
       setLoading(true);
       const data = await salesService.getSaleDetails(farmId, id);
@@ -571,6 +596,10 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
   };
 
   const handleDeleteSale = async (id: number) => {
+    if (!canDelete) {
+      alert('Permission denied: You do not have permission to delete sales records.');
+      return;
+    }
     if (!window.confirm('Are you sure you want to delete this sales bill? This will reverse stock deductions and adjust customer credit balances and financial transactions.')) {
       return;
     }
@@ -589,6 +618,10 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
 
   // Sales Return Triggering
   const handleOpenReturnModal = async (saleObj: any) => {
+    if (!canEdit) {
+      alert('Permission denied: You do not have permission to process sales returns.');
+      return;
+    }
     try {
       const data = await salesService.getSaleDetails(farmId, saleObj.Id);
       setReturnTargetSale(data);
@@ -678,14 +711,16 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
         </div>
         <div className="flex items-center gap-2">
           {!showBillingForm ? (
-            <button
-              onClick={handleNewSaleInit}
-              className="flex items-center justify-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs sm:text-sm font-semibold smooth-hover shadow-lg shadow-slate-900/10 shrink-0"
-              id="new-invoice-init-btn"
-            >
-              <Plus className="h-4.5 w-4.5 shrink-0" />
-              {t.newSaleBtn}
-            </button>
+            canCreate && (
+              <button
+                onClick={handleNewSaleInit}
+                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs sm:text-sm font-semibold smooth-hover shadow-lg shadow-slate-900/10 shrink-0"
+                id="new-invoice-init-btn"
+              >
+                <Plus className="h-4.5 w-4.5 shrink-0" />
+                {t.newSaleBtn}
+              </button>
+            )
           ) : (
             <button
               onClick={() => setShowBillingForm(false)}
@@ -694,34 +729,36 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
               Back to Records
             </button>
           )}
-          <button
-            onClick={async () => {
-              if (window.confirm('⚠️ Hard Reset Sales Form: Are you sure you want to delete all sales records and reset sales amounts to zero? Other modules will remain untouched.')) {
-                try {
-                  const res = await fetch('/api/developer/form-hard-reset', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ formKey: 'sales', farmId })
-                  });
-                  const data = await res.json();
-                  if (data.success) {
-                    alert(data.message || 'Sales form reset successfully!');
-                    window.dispatchEvent(new Event('farm-data-updated'));
-                    if (typeof fetchData === 'function') fetchData();
-                  } else {
-                    alert(data.error || 'Failed to reset form');
+          {canReset && (
+            <button
+              onClick={async () => {
+                if (window.confirm('⚠️ Hard Reset Sales Form: Are you sure you want to delete all sales records and reset sales amounts to zero? Other modules will remain untouched.')) {
+                  try {
+                    const res = await fetch('/api/developer/form-hard-reset', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ formKey: 'sales', farmId })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      alert(data.message || 'Sales form reset successfully!');
+                      window.dispatchEvent(new Event('farm-data-updated'));
+                      if (typeof fetchData === 'function') fetchData();
+                    } else {
+                      alert(data.error || 'Failed to reset form');
+                    }
+                  } catch (err: any) {
+                    alert(err.message || 'Error executing form reset');
                   }
-                } catch (err: any) {
-                  alert(err.message || 'Error executing form reset');
                 }
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
-            title="Hard Reset this form (Clear sales records, reset amounts to 0)"
-          >
-            <RotateCcw className="h-4 w-4 shrink-0" />
-            <span className="hidden sm:inline">Form Reset</span>
-          </button>
+              }}
+              className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
+              title="Hard Reset this form (Clear sales records, reset amounts to 0)"
+            >
+              <RotateCcw className="h-4 w-4 shrink-0" />
+              <span className="hidden sm:inline">Form Reset</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1801,12 +1838,14 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
               >
                 <Printer className="h-4 w-4" /> Print Tax Bill (Ctrl+P)
               </button>
-              <button
-                onClick={() => handleEditSale(activeInvoice.sale.Id)}
-                className="flex items-center gap-1 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-lg smooth-hover font-sans"
-              >
-                <Edit className="h-4 w-4" /> Edit POS Invoice
-              </button>
+              {canEdit && (
+                <button
+                  onClick={() => handleEditSale(activeInvoice.sale.Id)}
+                  className="flex items-center gap-1 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-lg smooth-hover font-sans"
+                >
+                  <Edit className="h-4 w-4" /> Edit POS Invoice
+                </button>
+              )}
               <button
                 onClick={() => setActiveInvoice(null)}
                 className="px-4 py-2 bg-slate-200 text-slate-800 hover:bg-slate-300 text-xs font-bold rounded-lg smooth-hover font-sans"
@@ -1894,27 +1933,33 @@ export default function SalesDesk({ currentLanguage = 'en' }: { currentLanguage?
                           >
                             <Eye className="h-3 w-3" /> View A4
                           </button>
-                          <button
-                            onClick={() => handleEditSale(s.Id)}
-                            className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold smooth-hover flex items-center gap-0.5"
-                            title="Edit Invoice"
-                          >
-                            <Edit className="h-3 w-3" /> Edit
-                          </button>
-                          <button
-                            onClick={() => handleOpenReturnModal(s)}
-                            className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold smooth-hover flex items-center gap-0.5"
-                            title="Sales Return Stock"
-                          >
-                            <RotateCcw className="h-3 w-3" /> Return
-                          </button>
-                          <button
-                            onClick={() => handleDeleteSale(s.Id)}
-                            className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-bold smooth-hover flex items-center gap-0.5"
-                            title="Delete Sales Bill"
-                          >
-                            <Trash2 className="h-3 w-3" /> Delete
-                          </button>
+                          {canEdit && (
+                            <>
+                              <button
+                                onClick={() => handleEditSale(s.Id)}
+                                className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold smooth-hover flex items-center gap-0.5"
+                                title="Edit Invoice"
+                              >
+                                <Edit className="h-3 w-3" /> Edit
+                              </button>
+                              <button
+                                onClick={() => handleOpenReturnModal(s)}
+                                className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold smooth-hover flex items-center gap-0.5"
+                                title="Sales Return Stock"
+                              >
+                                <RotateCcw className="h-3 w-3" /> Return
+                              </button>
+                            </>
+                          )}
+                          {canDelete && (
+                            <button
+                              onClick={() => handleDeleteSale(s.Id)}
+                              className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-bold smooth-hover flex items-center gap-0.5"
+                              title="Delete Sales Bill"
+                            >
+                              <Trash2 className="h-3 w-3" /> Delete
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

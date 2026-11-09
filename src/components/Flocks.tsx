@@ -4,6 +4,7 @@ import { Flock } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { flockService } from '../lib/dataService';
+import { hasPermission } from '../utils/permissions';
 
 const formatDateDDMMYYYY = (dateStr: string) => {
   if (!dateStr) return '';
@@ -39,6 +40,11 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
   const [flocks, setFlocks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
+
+  // RBAC granular claims
+  const canCreate = hasPermission('flocks.create');
+  const canEdit = hasPermission('flocks.edit');
+  const canDelete = hasPermission('flocks.delete');
 
   // New flock state with arrival age in weeks and days
   const [newFlock, setNewFlock] = useState({
@@ -220,6 +226,11 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
     e.preventDefault();
     if (isSubmitting) return;
 
+    if (!canCreate) {
+      setErrors({ form: 'Permission Denied: Your account does not have authorization to register flocks (flocks.create).' });
+      return;
+    }
+
     const validationErrors = validateFlock(newFlock);
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
@@ -275,6 +286,11 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
     e.preventDefault();
     if (isSubmitting || !editingFlock) return;
 
+    if (!canEdit) {
+      setEditErrors({ form: 'Permission Denied: Your account does not have authorization to edit flocks (flocks.edit).' });
+      return;
+    }
+
     const validationErrors = validateFlock(editingFlock);
     if (Object.keys(validationErrors).length > 0) {
       setEditErrors(validationErrors);
@@ -316,6 +332,10 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
   };
 
   const confirmDeleteFlock = async (id: number) => {
+    if (!canDelete) {
+      setNotification({ type: 'error', message: 'Permission Denied: Your account does not have authorization to delete flocks (flocks.delete).' });
+      return;
+    }
     try {
       setIsSubmitting(true);
       await flockService.deleteFlock(farmId, id);
@@ -343,6 +363,10 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
   };
 
   const confirmCloseFlock = async (id: number) => {
+    if (!canEdit) {
+      setNotification({ type: 'error', message: 'Permission Denied: Your account does not have authorization to finalize/sell flocks (flocks.edit).' });
+      return;
+    }
     try {
       setIsSubmitting(true);
       const target = flocks.find(f => f.Id === id);
@@ -389,18 +413,20 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
           </h1>
           <p className="text-slate-500 text-xs mt-1">{t.flocksSub}</p>
         </div>
-        <button
-          onClick={() => {
-            setShowAddForm(!showAddForm);
-            setEditingFlock(null);
-            setErrors({});
-          }}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold smooth-hover shadow-xs cursor-pointer"
-          id="toggle-add-flock-btn"
-        >
-          <Plus className="h-4 w-4" />
-          {t.registerFlock}
-        </button>
+        {canCreate && (
+          <button
+            onClick={() => {
+              setShowAddForm(!showAddForm);
+              setEditingFlock(null);
+              setErrors({});
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold smooth-hover shadow-xs cursor-pointer"
+            id="toggle-add-flock-btn"
+          >
+            <Plus className="h-4 w-4" />
+            {t.registerFlock}
+          </button>
+        )}
       </div>
 
       {/* Add New Flock Form */}
@@ -814,8 +840,8 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
                     <h3 className="text-lg font-bold font-display text-slate-800 mt-1">{flock.FlockName}</h3>
                     <p className="text-xs text-slate-400 font-mono italic mt-0.5">{flock.Breed}</p>
                   </div>
-                  <div className="flex gap-1.5">
-                    {flock.Status === 'Active' && (
+                  <div className="flex gap-1.5 items-center">
+                    {canEdit && flock.Status === 'Active' && (
                       <button
                         onClick={() => setFlockToClose(flock)}
                         title="Finalize & Close Flock"
@@ -825,21 +851,30 @@ export default function Flocks({ currentLanguage = 'en' }: FlocksProps) {
                         Sell
                       </button>
                     )}
-                    <button
-                      onClick={() => startEditFlock(flock)}
-                      title="Edit Flock Parameters"
-                      className="p-1.5 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-lg text-slate-400 hover:text-indigo-600 smooth-hover cursor-pointer"
-                      id={`edit-flock-btn-${flock.Id}`}
-                    >
-                      <Edit className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => setFlockToDelete(flock)}
-                      title="Delete Flock"
-                      className="p-1.5 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 rounded-lg text-slate-400 hover:text-rose-600 smooth-hover cursor-pointer"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {canEdit && (
+                      <button
+                        onClick={() => startEditFlock(flock)}
+                        title="Edit Flock Parameters"
+                        className="p-1.5 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-lg text-slate-400 hover:text-indigo-600 smooth-hover cursor-pointer"
+                        id={`edit-flock-btn-${flock.Id}`}
+                      >
+                        <Edit className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {canDelete && (
+                      <button
+                        onClick={() => setFlockToDelete(flock)}
+                        title="Delete Flock"
+                        className="p-1.5 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 rounded-lg text-slate-400 hover:text-rose-600 smooth-hover cursor-pointer"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {!canEdit && !canDelete && (
+                      <span className="text-[10px] font-mono text-slate-400 px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded">
+                        Read Only
+                      </span>
+                    )}
                   </div>
                 </div>
 

@@ -4,6 +4,7 @@ import { Customer, Supplier } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { stakeholderService, salesService, purchaseService, financeService } from '../lib/dataService';
+import { hasPermission } from '../utils/permissions';
 
 export default function Stakeholders({ currentLanguage = 'en', mode }: { currentLanguage?: Language; mode?: 'Customers' | 'Suppliers' }) {
   const t = translations[currentLanguage];
@@ -24,6 +25,11 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
   const [editingCustomerId, setEditingCustomerId] = useState<number | null>(null);
   const [editingSupplierId, setEditingSupplierId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // RBAC granular claims
+  const canCreate = hasPermission('customers.create') || hasPermission('suppliers.create');
+  const canEdit = hasPermission('customers.edit') || hasPermission('suppliers.edit');
+  const canDelete = hasPermission('customers.delete') || hasPermission('suppliers.delete');
 
   // Unified Form Fields
   const [cForm, setCForm] = useState({
@@ -108,6 +114,16 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    if (editingCustomerId && !canEdit) {
+      alert('Permission Denied: Your account does not have authorization to edit customers (customers.edit).');
+      return;
+    }
+    if (!editingCustomerId && !canCreate) {
+      alert('Permission Denied: Your account does not have authorization to add customers (customers.create).');
+      return;
+    }
+
     if (!cForm.FullName) return alert('Name is required');
     try {
       setIsSubmitting(true);
@@ -137,6 +153,16 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
   const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    if (editingSupplierId && !canEdit) {
+      alert('Permission Denied: Your account does not have authorization to edit suppliers (customers.edit).');
+      return;
+    }
+    if (!editingSupplierId && !canCreate) {
+      alert('Permission Denied: Your account does not have authorization to add suppliers (customers.create).');
+      return;
+    }
+
     if (!sForm.CompanyName) return alert('Company name is required');
     try {
       setIsSubmitting(true);
@@ -164,6 +190,10 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
   };
 
   const deleteCustomer = async (id: number) => {
+    if (!canDelete) {
+      alert('Permission Denied: Your account does not have authorization to delete customers (customers.delete).');
+      return;
+    }
     if (!confirm('Are you sure you want to delete this customer registry record?')) return;
     try {
       await stakeholderService.deleteCustomer(farmId, id);
@@ -175,6 +205,10 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
   };
 
   const deleteSupplier = async (id: number) => {
+    if (!canDelete) {
+      alert('Permission Denied: Your account does not have authorization to delete suppliers (customers.delete).');
+      return;
+    }
     if (!confirm('Are you sure you want to delete this supplier registry record?')) return;
     try {
       await stakeholderService.deleteSupplier(farmId, id);
@@ -235,24 +269,26 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
             />
           </div>
         </div>
-        <button
-          onClick={() => {
-            if (showAddForm) {
-              setShowAddForm(false);
-              setEditingCustomerId(null);
-              setEditingSupplierId(null);
-              setCForm({ FullName: '', Email: '', Phone: '', Company: '', OpeningCreditBalance: 0, CurrentCreditBalance: 0, Address: '' });
-              setSForm({ CompanyName: '', ContactPerson: '', Email: '', Phone: '', OpeningCreditBalance: 0, CurrentCreditBalance: 0, Address: '' });
-            } else {
-              setShowAddForm(true);
-            }
-          }}
-          className="flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold smooth-hover self-start sm:self-center"
-          id="add-stakeholder-btn"
-        >
-          <Plus className="h-4 w-4 shrink-0" />
-          {editingCustomerId || editingSupplierId ? 'Finish Editing' : t.addStakeholderBtn}
-        </button>
+        {(canCreate || ((editingCustomerId || editingSupplierId) && canEdit)) && (
+          <button
+            onClick={() => {
+              if (showAddForm) {
+                setShowAddForm(false);
+                setEditingCustomerId(null);
+                setEditingSupplierId(null);
+                setCForm({ FullName: '', Email: '', Phone: '', Company: '', OpeningCreditBalance: 0, CurrentCreditBalance: 0, Address: '' });
+                setSForm({ CompanyName: '', ContactPerson: '', Email: '', Phone: '', OpeningCreditBalance: 0, CurrentCreditBalance: 0, Address: '' });
+              } else {
+                setShowAddForm(true);
+              }
+            }}
+            className="flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold smooth-hover self-start sm:self-center"
+            id="add-stakeholder-btn"
+          >
+            <Plus className="h-4 w-4 shrink-0" />
+            {editingCustomerId || editingSupplierId ? 'Finish Editing' : t.addStakeholderBtn}
+          </button>
+        )}
       </div>
 
       {/* Add Forms */}
@@ -457,32 +493,39 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
                       {c.Company && <span className="text-[11px] text-slate-400 font-medium font-mono">{c.Company}</span>}
                     </div>
                     <div className="flex gap-1 items-center">
-                      <button
-                        onClick={() => {
-                          setEditingCustomerId(c.Id);
-                          setCForm({
-                            FullName: c.FullName,
-                            Email: c.Email || '',
-                            Phone: c.Phone || '',
-                            Company: c.Company || '',
-                            OpeningCreditBalance: c.OpeningCreditBalance || 0,
-                            CurrentCreditBalance: c.CurrentCreditBalance ?? 0,
-                            Address: c.Address || ''
-                          });
-                          setShowAddForm(true);
-                        }}
-                        className="p-1 text-slate-400 hover:text-indigo-600 smooth-hover"
-                        title="Edit Customer"
-                      >
-                        <Edit className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => deleteCustomer(c.Id)}
-                        className="p-1 text-slate-400 hover:text-red-500 smooth-hover"
-                        title="Delete Customer"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      {canEdit && (
+                        <button
+                          onClick={() => {
+                            setEditingCustomerId(c.Id);
+                            setCForm({
+                              FullName: c.FullName,
+                              Email: c.Email || '',
+                              Phone: c.Phone || '',
+                              Company: c.Company || '',
+                              OpeningCreditBalance: c.OpeningCreditBalance || 0,
+                              CurrentCreditBalance: c.CurrentCreditBalance ?? 0,
+                              Address: c.Address || ''
+                            });
+                            setShowAddForm(true);
+                          }}
+                          className="p-1 text-slate-400 hover:text-indigo-600 smooth-hover"
+                          title="Edit Customer"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={() => deleteCustomer(c.Id)}
+                          className="p-1 text-slate-400 hover:text-red-500 smooth-hover"
+                          title="Delete Customer"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                      {!canEdit && !canDelete && (
+                        <span className="text-[10px] font-mono text-slate-400 px-1 py-0.5 bg-slate-50 border border-slate-100 rounded">Read Only</span>
+                      )}
                     </div>
                   </div>
 
@@ -528,32 +571,39 @@ export default function Stakeholders({ currentLanguage = 'en', mode }: { current
                       {s.ContactPerson && <span className="text-[11px] text-indigo-600 font-bold font-mono uppercase">Rep: {s.ContactPerson}</span>}
                     </div>
                     <div className="flex gap-1 items-center">
-                      <button
-                        onClick={() => {
-                          setEditingSupplierId(s.Id);
-                          setSForm({
-                            CompanyName: s.CompanyName,
-                            ContactPerson: s.ContactPerson || '',
-                            Email: s.Email || '',
-                            Phone: s.Phone || '',
-                            OpeningCreditBalance: s.OpeningCreditBalance || 0,
-                            CurrentCreditBalance: s.CurrentCreditBalance ?? 0,
-                            Address: s.Address || ''
-                          });
-                          setShowAddForm(true);
-                        }}
-                        className="p-1 text-slate-400 hover:text-indigo-600 smooth-hover"
-                        title="Edit Supplier"
-                      >
-                        <Edit className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => deleteSupplier(s.Id)}
-                        className="p-1 text-slate-400 hover:text-red-500 smooth-hover"
-                        title="Delete Supplier"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      {canEdit && (
+                        <button
+                          onClick={() => {
+                            setEditingSupplierId(s.Id);
+                            setSForm({
+                              CompanyName: s.CompanyName,
+                              ContactPerson: s.ContactPerson || '',
+                              Email: s.Email || '',
+                              Phone: s.Phone || '',
+                              OpeningCreditBalance: s.OpeningCreditBalance || 0,
+                              CurrentCreditBalance: s.CurrentCreditBalance ?? 0,
+                              Address: s.Address || ''
+                            });
+                            setShowAddForm(true);
+                          }}
+                          className="p-1 text-slate-400 hover:text-indigo-600 smooth-hover"
+                          title="Edit Supplier"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          onClick={() => deleteSupplier(s.Id)}
+                          className="p-1 text-slate-400 hover:text-red-500 smooth-hover"
+                          title="Delete Supplier"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                      {!canEdit && !canDelete && (
+                        <span className="text-[10px] font-mono text-slate-400 px-1 py-0.5 bg-slate-50 border border-slate-100 rounded">Read Only</span>
+                      )}
                     </div>
                   </div>
 

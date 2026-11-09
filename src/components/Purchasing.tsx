@@ -19,7 +19,6 @@ import {
   ChevronDown, 
   ChevronUp, 
   BadgeIndianRupee,
-  Sparkles,
   Camera
 } from 'lucide-react';
 import { Supplier, Inventory } from '../types';
@@ -27,6 +26,7 @@ import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { purchaseService, stakeholderService, inventoryService } from '../lib/dataService';
 import { InvoiceUploadModal } from './InvoiceUploadModal';
+import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
 
 interface PurchaseItem {
   InventoryId: string;
@@ -119,12 +119,18 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
   const [returnNotes, setReturnNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // AI Multimodal Invoice Scanner states
+  // RBAC granular claims
+  const canCreate = hasPermission('purchases.create');
+  const canEdit = hasPermission('purchases.edit');
+  const canDelete = hasPermission('purchases.delete');
+  const canReset = isSuperOrAdmin();
+
+  // Multimodal Invoice Scanner states (Always available for permitted users on Desktop & Mobile)
   const [isAiScanModalOpen, setIsAiScanModalOpen] = useState(false);
-  const [isAiScanAvailable, setIsAiScanAvailable] = useState(false);
+  const [isAiScanAvailable, setIsAiScanAvailable] = useState(true);
   const [aiScanSuccessBanner, setAiScanSuccessBanner] = useState<string | null>(null);
 
-  // Probe quota status on mount to dynamically show/hide the AI Bill Scan button
+  // Background probe of API key & quota status
   useEffect(() => {
     let active = true;
     fetch('/api/ai/quota-status', {
@@ -134,12 +140,15 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
     })
       .then(res => res.json())
       .then(data => {
-        if (active) {
-          setIsAiScanAvailable(Boolean(data && data.available === true));
+        if (active && data) {
+          // Keep active unless explicitly rejected with fatal failure
+          if (data.available === false && data.reason === 'NO_API_KEY_CONFIGURED') {
+            console.debug('[BillScan] Server reported no explicit API key; fallback env active.');
+          }
         }
       })
       .catch(() => {
-        if (active) setIsAiScanAvailable(false);
+        // Non-blocking in desktop & mobile offline
       });
     return () => { active = false; };
   }, []);
@@ -486,6 +495,16 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    if (editPurchaseId && !canEdit) {
+      alert('Permission Denied: Your operator account does not have authorization to edit purchase bills (purchases.edit).');
+      return;
+    }
+    if (!editPurchaseId && !canCreate) {
+      alert('Permission Denied: Your operator account does not have authorization to create purchase bills (purchases.create).');
+      return;
+    }
+
     if (!supplierId) return alert('Please choose a supplier.');
     if (items.some(i => !i.InventoryId)) return alert('Please choose a material/stock item for each row.');
 
@@ -665,6 +684,10 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
   };
 
   const handleDeletePurchase = async (id: number) => {
+    if (!canDelete) {
+      alert('Permission Denied: Your operator account does not have authorization to delete purchase bills (purchases.delete).');
+      return;
+    }
     if (!window.confirm('Are you sure you want to delete this purchase bill? This will reverse stock additions, update supplier credit balances, and adjust financial transactions.')) {
       return;
     }
@@ -683,6 +706,10 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
 
   // Open Edit Mode
   const handleEditPurchase = async (p: any) => {
+    if (!canEdit) {
+      alert('Permission Denied: Your operator account does not have authorization to edit purchase bills (purchases.edit).');
+      return;
+    }
     try {
       const data = await purchaseService.getPurchaseDetails(farmId, p.Id);
 
@@ -742,6 +769,10 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
 
   // Open Returns Modal for partial / full items returns
   const handleOpenReturnModal = async (id: number) => {
+    if (!canEdit) {
+      alert('Permission Denied: Your operator account does not have authorization to process supplier returns (purchases.edit).');
+      return;
+    }
     try {
       const data = await purchaseService.getPurchaseDetails(farmId, id);
 
@@ -830,78 +861,82 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
           </p>
         </div>
         <div className="flex gap-2 flex-wrap items-center">
-          {isAiScanAvailable && (
+          {canCreate && (
             <button
               type="button"
               onClick={() => setIsAiScanModalOpen(true)}
               className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white smooth-hover shadow-md shadow-emerald-600/15 shrink-0 cursor-pointer"
               id="ai-bill-scan-btn"
-              title="Scan purchase bill photo or PDF with AI multimodal OCR"
+              title="Scan purchase bill photo or PDF document"
             >
-              <Sparkles className="h-4 w-4 shrink-0 text-emerald-200" />
-              <span>AI Bill Scan (Photo / PDF)</span>
+              <FileText className="h-4 w-4 shrink-0 text-emerald-100" />
+              <span>Scan Bill (Photo / PDF)</span>
             </button>
           )}
-          <button
-            onClick={() => {
-              setEditPurchaseId(null);
-              // reset states
-              setItems([{ InventoryId: '', ItemType: 'Inventory', Quantity: 1, UnitPrice: 0, GSTPercentage: 0, WeightPerUnit: 0, DiscountPercentage: 0 }]);
-              setExpenses([{ ExpenseName: 'Transport Freight', Amount: 0, AllocationMethod: 'Equal', TargetInventoryId: '' }]);
-              setNotes('');
-              setInvoiceNumber('');
-              setReceivedAmount(0);
-              setSupplierId('');
-              setSupplierSearchQuery('');
-              setPurchaseDate(new Date().toISOString().split('T')[0]);
-              setPaymentMode('credit');
-              setRowSearchQueries({});
-              setShowAddForm(!showAddForm);
-            }}
-            className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold smooth-hover shadow-md shrink-0 ${
-              showAddForm ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-900 hover:bg-slate-800 text-white'
-            }`}
-            id="toggle-add-purchase-btn"
-          >
-            <Plus className="h-4 w-4 shrink-0" />
-            {showAddForm ? 'Hide Form' : 'New Purchase Bill'}
-          </button>
-          <button
-            onClick={async () => {
-              if (window.confirm('⚠️ Hard Reset Purchasing Form: Are you sure you want to delete all purchase records and reset purchase amounts to zero? Other modules will remain untouched.')) {
-                try {
-                  const res = await fetch('/api/developer/form-hard-reset', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ formKey: 'purchasing', farmId })
-                  });
-                  const data = await res.json();
-                  if (data.success) {
-                    alert(data.message || 'Purchasing form reset successfully!');
-                    window.dispatchEvent(new Event('farm-data-updated'));
-                    fetchData();
-                  } else {
-                    alert(data.error || 'Failed to reset form');
+          {canCreate && (
+            <button
+              onClick={() => {
+                setEditPurchaseId(null);
+                // reset states
+                setItems([{ InventoryId: '', ItemType: 'Inventory', Quantity: 1, UnitPrice: 0, GSTPercentage: 0, WeightPerUnit: 0, DiscountPercentage: 0 }]);
+                setExpenses([{ ExpenseName: 'Transport Freight', Amount: 0, AllocationMethod: 'Equal', TargetInventoryId: '' }]);
+                setNotes('');
+                setInvoiceNumber('');
+                setReceivedAmount(0);
+                setSupplierId('');
+                setSupplierSearchQuery('');
+                setPurchaseDate(new Date().toISOString().split('T')[0]);
+                setPaymentMode('credit');
+                setRowSearchQueries({});
+                setShowAddForm(!showAddForm);
+              }}
+              className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold smooth-hover shadow-md shrink-0 ${
+                showAddForm ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-900 hover:bg-slate-800 text-white'
+              }`}
+              id="toggle-add-purchase-btn"
+            >
+              <Plus className="h-4 w-4 shrink-0" />
+              {showAddForm ? 'Hide Form' : 'New Purchase Bill'}
+            </button>
+          )}
+          {canReset && (
+            <button
+              onClick={async () => {
+                if (window.confirm('⚠️ Hard Reset Purchasing Form: Are you sure you want to delete all purchase records and reset purchase amounts to zero? Other modules will remain untouched.')) {
+                  try {
+                    const res = await fetch('/api/developer/form-hard-reset', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ formKey: 'purchasing', farmId })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      alert(data.message || 'Purchasing form reset successfully!');
+                      window.dispatchEvent(new Event('farm-data-updated'));
+                      fetchData();
+                    } else {
+                      alert(data.error || 'Failed to reset form');
+                    }
+                  } catch (err: any) {
+                    alert(err.message || 'Error executing form reset');
                   }
-                } catch (err: any) {
-                  alert(err.message || 'Error executing form reset');
                 }
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
-            title="Hard Reset this form (Clear purchase records, reset amounts to 0)"
-          >
-            <RotateCcw className="h-4 w-4 shrink-0" />
-            <span className="hidden sm:inline">Form Reset</span>
-          </button>
+              }}
+              className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
+              title="Hard Reset this form (Clear purchase records, reset amounts to 0)"
+            >
+              <RotateCcw className="h-4 w-4 shrink-0" />
+              <span className="hidden sm:inline">Form Reset</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* AI Scan Success Notification Banner */}
+      {/* Bill Scan Success Notification Banner */}
       {aiScanSuccessBanner && (
         <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl flex items-center justify-between text-xs font-medium shadow-xs animate-fade-in">
           <div className="flex items-center gap-2.5">
-            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{aiScanSuccessBanner}</span>
           </div>
           <button
@@ -929,15 +964,15 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
                   </h3>
                 </div>
                 <div className="flex items-center gap-2">
-                  {isAiScanAvailable && (
+                  {canCreate && (
                     <button
                       type="button"
                       onClick={() => setIsAiScanModalOpen(true)}
                       className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
                       title="Upload or scan bill image/PDF to auto-populate form"
                     >
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Auto-Fill with AI Scan</span>
+                      <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Auto-Fill from Bill Scan</span>
                     </button>
                   )}
                   <div className="flex items-center gap-1.5 text-xs text-slate-400">
@@ -2028,30 +2063,41 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
                           {/* Action triggers */}
                           <td className="px-5 py-3.5 text-right" onClick={e => e.stopPropagation()}>
                             <div className="flex items-center justify-end gap-2">
-                              <button
-                                onClick={() => handleEditPurchase(p)}
-                                title="Edit / Adjust Purchase Record"
-                                className="p-1 px-2.5 border border-slate-200 hover:border-indigo-300 text-xs text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg flex items-center gap-1 font-semibold smooth-hover"
-                              >
-                                <Edit2 className="h-3 w-3" />
-                                Edit Bill
-                              </button>
-                              <button
-                                onClick={() => handleOpenReturnModal(p.Id)}
-                                title="Log Supplier Return"
-                                className="p-1 px-2.5 border border-slate-200 hover:border-amber-300 hover:bg-amber-50 text-xs text-slate-700 hover:text-amber-700 rounded-lg flex items-center gap-1 font-semibold smooth-hover"
-                              >
-                                <Undo2 className="h-3 w-3 text-amber-500" />
-                                Return items
-                              </button>
-                              <button
-                                onClick={() => handleDeletePurchase(p.Id)}
-                                title="Delete Purchase Record"
-                                className="p-1 px-2.5 border border-slate-200 hover:border-red-300 hover:bg-red-50 text-xs text-slate-700 hover:text-red-700 rounded-lg flex items-center gap-1 font-semibold smooth-hover"
-                              >
-                                <Trash2 className="h-3 w-3 text-red-500" />
-                                Delete Bill
-                              </button>
+                              {canEdit && (
+                                <>
+                                  <button
+                                    onClick={() => handleEditPurchase(p)}
+                                    title="Edit / Adjust Purchase Record"
+                                    className="p-1 px-2.5 border border-slate-200 hover:border-indigo-300 text-xs text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg flex items-center gap-1 font-semibold smooth-hover"
+                                  >
+                                    <Edit2 className="h-3 w-3" />
+                                    Edit Bill
+                                  </button>
+                                  <button
+                                    onClick={() => handleOpenReturnModal(p.Id)}
+                                    title="Log Supplier Return"
+                                    className="p-1 px-2.5 border border-slate-200 hover:border-amber-300 hover:bg-amber-50 text-xs text-slate-700 hover:text-amber-700 rounded-lg flex items-center gap-1 font-semibold smooth-hover"
+                                  >
+                                    <Undo2 className="h-3 w-3 text-amber-500" />
+                                    Return items
+                                  </button>
+                                </>
+                              )}
+                              {canDelete && (
+                                <button
+                                  onClick={() => handleDeletePurchase(p.Id)}
+                                  title="Delete Purchase Record"
+                                  className="p-1 px-2.5 border border-slate-200 hover:border-red-300 hover:bg-red-50 text-xs text-slate-700 hover:text-red-700 rounded-lg flex items-center gap-1 font-semibold smooth-hover"
+                                >
+                                  <Trash2 className="h-3 w-3 text-red-500" />
+                                  Delete Bill
+                                </button>
+                              )}
+                              {!canEdit && !canDelete && (
+                                <span className="text-[11px] text-slate-400 font-medium px-2 py-1 bg-slate-100 rounded">
+                                  View Only
+                                </span>
+                              )}
                             </div>
                           </td>
                         </tr>

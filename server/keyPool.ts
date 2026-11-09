@@ -22,8 +22,9 @@ class GeminiKeyPoolManager {
     const rawKeys: string[] = [];
 
     // 1. Check primary environment variable
-    if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 10) {
-      rawKeys.push(process.env.GEMINI_API_KEY.trim());
+    const primaryKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+    if (primaryKey && primaryKey.trim().length > 10) {
+      rawKeys.push(primaryKey.trim());
     }
 
     // 2. Check comma-separated list
@@ -74,13 +75,18 @@ class GeminiKeyPoolManager {
   }
 
   public getNextClient(): { client: GoogleGenAI; keyId: string; key: string } | null {
-    // If no keys explicitly listed in pool, try default empty client (relies on process.env.GEMINI_API_KEY)
     if (this.keys.length === 0) {
-      if (process.env.GEMINI_API_KEY) {
+      this.initKeys();
+    }
+
+    // If still no keys explicitly listed in pool, try default empty client (relies on process.env.GEMINI_API_KEY or process.env.API_KEY)
+    if (this.keys.length === 0) {
+      const activeKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+      if (activeKey) {
         return {
-          client: new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }),
+          client: new GoogleGenAI({ apiKey: activeKey }),
           keyId: 'default_env',
-          key: process.env.GEMINI_API_KEY
+          key: activeKey
         };
       }
       return null;

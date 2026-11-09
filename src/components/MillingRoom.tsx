@@ -21,6 +21,7 @@ import { FoodRecipe, Inventory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { recipeService, inventoryService } from '../lib/dataService';
+import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
 
 interface RecipeLineItem {
   IngredientId: string;
@@ -99,6 +100,12 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
   const t = translations[currentLanguage];
   const { currentFarm } = useFarm();
   const farmId = currentFarm?.Id || 1;
+
+  // RBAC Permission checks
+  const canCreate = hasPermission('inventory.create');
+  const canEdit = hasPermission('inventory.edit');
+  const canDelete = hasPermission('inventory.delete');
+  const canReset = isSuperOrAdmin();
 
   // Active Tab: 'produce' | 'recipes' | 'history'
   const [activeTab, setActiveTab] = useState<'produce' | 'recipes' | 'history'>('produce');
@@ -227,6 +234,10 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
   // Execute Quick Milling Batch
   const handleExecuteBatch = async () => {
     if (producing) return;
+    if (!canCreate && !canEdit) {
+      setProductionError('Permission denied: You do not have permission to execute feed compounding batches.');
+      return;
+    }
     if (!activeRecipe) {
       setProductionError('Please select a formula first.');
       return;
@@ -347,6 +358,10 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
   const handleSubmitRecipe = async (e: React.FormEvent) => {
     e.preventDefault();
     if (savingRecipe) return;
+    if (!canCreate) {
+      alert('Permission denied: You do not have permission to create feed recipes.');
+      return;
+    }
     if (totalPercentage !== 100) {
       alert(`Total ingredient percentage must equal 100%. Currently: ${totalPercentage}%`);
       return;
@@ -399,6 +414,10 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
 
   // Delete Recipe
   const handleDeleteRecipe = async (recipeId: number) => {
+    if (!canDelete) {
+      alert('Permission denied: You do not have permission to delete feed recipes.');
+      return;
+    }
     if (!confirm('Are you sure you want to permanently delete this recipe?')) return;
     try {
       await recipeService.deleteRecipe(farmId, recipeId);
@@ -429,7 +448,8 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
           </div>
         </div>
 
-                  <button
+        {canReset && (
+          <button
             onClick={async () => {
               if (window.confirm("⚠️ Hard Reset Form (Milling Room): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
                 try {
@@ -458,6 +478,7 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
             <RotateCcw className="h-4 w-4 shrink-0" />
             <span className="hidden sm:inline">Form Reset</span>
           </button>
+        )}
 {/* Quick Nav Tabs */}
         <div className="flex items-center gap-1 bg-slate-100 p-1.5 rounded-xl border border-slate-200/80 shrink-0 self-start sm:self-center">
           <button
@@ -653,9 +674,9 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
                       {/* Big Action Button */}
                       <button
                         onClick={handleExecuteBatch}
-                        disabled={producing || batchStockCheck.hasShortage}
+                        disabled={producing || batchStockCheck.hasShortage || (!canCreate && !canEdit)}
                         className={`w-full py-3 px-4 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-sm ${
-                          batchStockCheck.hasShortage
+                          batchStockCheck.hasShortage || (!canCreate && !canEdit)
                             ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
                             : 'bg-slate-900 hover:bg-slate-800 text-white'
                         }`}
@@ -674,7 +695,13 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
                         )}
                       </button>
 
-                      {batchStockCheck.hasShortage && (
+                      {!canCreate && !canEdit && (
+                        <p className="text-[11px] text-slate-500 text-center font-medium">
+                          🔒 Read-only access: Batch production is restricted for your role.
+                        </p>
+                      )}
+
+                      {batchStockCheck.hasShortage && (canCreate || canEdit) && (
                         <p className="text-[11px] text-rose-600 text-center font-medium">
                           ⚠️ Some ingredients are short in stock. Update inventory before producing.
                         </p>
@@ -799,14 +826,16 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
                     Create or update feed formulas. The system will automatically link batch outputs to warehouse stock.
                   </p>
                 </div>
-                <button
-                  onClick={() => setShowAddForm(!showAddForm)}
-                  className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shrink-0"
-                  id="toggle-add-recipe-form-btn"
-                >
-                  <Plus className="h-4 w-4" />
-                  {mt.newFormulaBtn}
-                </button>
+                {canCreate && (
+                  <button
+                    onClick={() => setShowAddForm(!showAddForm)}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shrink-0"
+                    id="toggle-add-recipe-form-btn"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {mt.newFormulaBtn}
+                  </button>
+                )}
               </div>
 
               {/* Recipe Creation Form */}
@@ -1079,13 +1108,15 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
                             Finished Stock Item: {row.TargetItemName || row.RecipeName}
                           </span>
                         </div>
-                        <button
-                          onClick={() => handleDeleteRecipe(row.Id)}
-                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                          title="Delete Formula"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {canDelete && (
+                          <button
+                            onClick={() => handleDeleteRecipe(row.Id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                            title="Delete Formula"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
 
                       {(row.Notes || row.Description) && (

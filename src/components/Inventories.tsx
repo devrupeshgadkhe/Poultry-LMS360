@@ -4,6 +4,7 @@ import { Inventory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { inventoryService } from '../lib/dataService';
+import { hasPermission } from '../utils/permissions';
 
 export default function Inventories({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
   const t = translations[currentLanguage];
@@ -14,6 +15,11 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
+
+  // RBAC granular claims
+  const canCreate = hasPermission('inventory.create');
+  const canEdit = hasPermission('inventory.edit');
+  const canDelete = hasPermission('inventory.delete');
   const [searchQuery, setSearchQuery] = useState('');
   const [newItem, setNewItem] = useState({
     ItemName: '',
@@ -72,6 +78,16 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
+
+    if (editingItemId && !canEdit) {
+      alert('Permission Denied: Your account does not have authorization to edit inventory (inventory.edit).');
+      return;
+    }
+    if (!editingItemId && !canCreate) {
+      alert('Permission Denied: Your account does not have authorization to add inventory (inventory.create).');
+      return;
+    }
+
     if (!newItem.ItemName) return alert('Please enter an item name.');
     try {
       setIsSubmitting(true);
@@ -128,6 +144,10 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
   };
 
   const deleteItem = async (id: number) => {
+    if (!canDelete) {
+      alert('Permission Denied: Your account does not have authorization to delete inventory (inventory.delete).');
+      return;
+    }
     if (!confirm('Are you sure you want to delete this inventory item?')) return;
     try {
       try {
@@ -166,33 +186,35 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
           </h1>
           <p className="text-slate-500 text-xs sm:text-sm mt-1">{t.stockSub}</p>
         </div>
-        <button
-          onClick={() => {
-            if (showAddForm) {
-              setShowAddForm(false);
-              setEditingItemId(null);
-            } else {
-              setEditingItemId(null);
-              setNewItem({
-                ItemName: '',
-                Category: 'Feed',
-                UnitOfMeasurement: 'Kg',
-                UnitPrice: 0.50,
-                SellingPrice: 0.75,
-                CurrentStock: 1000,
-                WeightPerUnit: 1.0,
-                MinThreshold: 100,
-                Notes: ''
-              });
-              setShowAddForm(true);
-            }
-          }}
-          className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs sm:text-sm font-semibold smooth-hover shadow-xs shrink-0 self-start sm:self-center"
-          id="toggle-add-inv-btn"
-        >
-          <Plus className="h-4 w-4 shrink-0" />
-          {t.newItemBtn}
-        </button>
+        {(canCreate || (editingItemId && canEdit)) && (
+          <button
+            onClick={() => {
+              if (showAddForm) {
+                setShowAddForm(false);
+                setEditingItemId(null);
+              } else {
+                setEditingItemId(null);
+                setNewItem({
+                  ItemName: '',
+                  Category: 'Feed',
+                  UnitOfMeasurement: 'Kg',
+                  UnitPrice: 0.50,
+                  SellingPrice: 0.75,
+                  CurrentStock: 1000,
+                  WeightPerUnit: 1.0,
+                  MinThreshold: 100,
+                  Notes: ''
+                });
+                setShowAddForm(true);
+              }
+            }}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs sm:text-sm font-semibold smooth-hover shadow-xs shrink-0 self-start sm:self-center"
+            id="toggle-add-inv-btn"
+          >
+            <Plus className="h-4 w-4 shrink-0" />
+            {t.newItemBtn}
+          </button>
+        )}
       </div>
 
       {showAddForm && (
@@ -414,37 +436,44 @@ export default function Inventories({ currentLanguage = 'en' }: { currentLanguag
                         <td className="px-5 py-3.5 text-xs text-slate-400 max-w-xs truncate" title={item.Notes}>{item.Notes || '-'}</td>
                         <td className="px-5 py-3.5 text-right">
                           <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingItemId(item.Id);
-                                setNewItem({
-                                  ItemName: item.ItemName || '',
-                                  Category: item.Category || 'Feed',
-                                  UnitOfMeasurement: item.UnitOfMeasurement || 'Kg',
-                                  UnitPrice: item.UnitPrice || 0,
-                                  SellingPrice: item.SellingPrice || 0,
-                                  CurrentStock: item.CurrentStock || 0,
-                                  WeightPerUnit: item.WeightPerUnit || 1,
-                                  MinThreshold: item.MinThreshold || 0,
-                                  Notes: item.Notes || ''
-                                });
-                                setShowAddForm(true);
-                              }}
-                              className="p-1 px-2 border border-slate-200 hover:border-indigo-200 text-slate-400 hover:text-indigo-700 hover:bg-slate-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
-                              id={`edit-inv-btn-${item.Id}`}
-                            >
-                              <Edit className="h-3 w-3" />
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => deleteItem(item.Id)}
-                              className="p-1 px-2 border border-slate-200 hover:border-red-200 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
-                              id={`del-inv-btn-${item.Id}`}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                              Delete
-                            </button>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingItemId(item.Id);
+                                  setNewItem({
+                                    ItemName: item.ItemName || '',
+                                    Category: item.Category || 'Feed',
+                                    UnitOfMeasurement: item.UnitOfMeasurement || 'Kg',
+                                    UnitPrice: item.UnitPrice || 0,
+                                    SellingPrice: item.SellingPrice || 0,
+                                    CurrentStock: item.CurrentStock || 0,
+                                    WeightPerUnit: item.WeightPerUnit || 1,
+                                    MinThreshold: item.MinThreshold || 0,
+                                    Notes: item.Notes || ''
+                                  });
+                                  setShowAddForm(true);
+                                }}
+                                className="p-1 px-2 border border-slate-200 hover:border-indigo-200 text-slate-400 hover:text-indigo-700 hover:bg-slate-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
+                                id={`edit-inv-btn-${item.Id}`}
+                              >
+                                <Edit className="h-3 w-3" />
+                                Edit
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button
+                                onClick={() => deleteItem(item.Id)}
+                                className="p-1 px-2 border border-slate-200 hover:border-red-200 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg smooth-hover text-xs flex gap-1 items-center"
+                                id={`del-inv-btn-${item.Id}`}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                Delete
+                              </button>
+                            )}
+                            {!canEdit && !canDelete && (
+                              <span className="text-[11px] text-slate-400 font-mono">View Only</span>
+                            )}
                           </div>
                         </td>
                       </tr>

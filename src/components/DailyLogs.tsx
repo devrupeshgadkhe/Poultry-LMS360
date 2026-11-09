@@ -4,6 +4,7 @@ import { DailyLog, Flock, Inventory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { dailyLogService, flockService, inventoryService } from '../lib/dataService';
+import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
 
 export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
   const t = translations[currentLanguage];
@@ -19,13 +20,10 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
   const [editingLogId, setEditingLogId] = useState<number | null>(null);
 
   // User role and granular permissions
-  const userRole = localStorage.getItem('userRole') || 'Staff';
-  const userPermsStr = (localStorage.getItem('userPermissions') || '').toLowerCase();
-  const isSuperOrAdmin = userRole === 'Developer' || userRole === 'Admin' || userPermsStr === 'all' || userPermsStr.includes('admin');
-
-  const canCreate = isSuperOrAdmin || userPermsStr.includes('dailylogs.create');
-  const canEdit = isSuperOrAdmin || userPermsStr.includes('dailylogs.edit');
-  const canDelete = isSuperOrAdmin || userPermsStr.includes('dailylogs.delete');
+  const canCreate = hasPermission('dailylogs.create');
+  const canEdit = hasPermission('dailylogs.edit');
+  const canDelete = hasPermission('dailylogs.delete');
+  const canReset = isSuperOrAdmin();
   
   const [newLog, setNewLog] = useState({
     FlockId: '',
@@ -242,6 +240,10 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
   };
 
   const startEditLog = (log: any) => {
+    if (!canEdit) {
+      alert('Security Alert: You do not have permission to edit daily logs.');
+      return;
+    }
     setEditingLogId(log.Id);
     setNewLog({
       FlockId: String(log.FlockId),
@@ -400,7 +402,8 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
           </h1>
           <p className="text-slate-500 text-xs sm:text-sm mt-1">{t.dailyLogsSub}</p>
         </div>
-                  <button
+        {canReset && (
+          <button
             onClick={async () => {
               if (window.confirm("⚠️ Hard Reset Form (Daily Logs): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
                 try {
@@ -429,6 +432,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
             <RotateCcw className="h-4 w-4 shrink-0" />
             <span className="hidden sm:inline">Form Reset</span>
           </button>
+        )}
 {canCreate && (
           <button
             onClick={() => {
