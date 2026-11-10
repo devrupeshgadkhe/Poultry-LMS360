@@ -94,6 +94,7 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
       } else {
         setKeyActionMsg({ type: 'success', text: data.message || 'Key added successfully!' });
         setNewApiKey('');
+        setTestResult({});
         setGeminiKeys(data.keys || []);
       }
     } catch (err: any) {
@@ -352,9 +353,9 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
                 <button
                   type="button"
                   onClick={() => handleTestKey('pool', false)}
-                  disabled={Boolean(testingKeyId)}
+                  disabled={Boolean(testingKeyId) || geminiKeys.length === 0}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-                  title="Run live AI ping test"
+                  title={geminiKeys.length === 0 ? "Please add a Gemini API key below first to test" : "Run live AI ping test"}
                 >
                   <CheckCircle2 className={`h-3.5 w-3.5 ${testingKeyId === 'pool' ? 'animate-spin' : ''}`} />
                   {testingKeyId === 'pool' ? 'Testing Connection...' : 'Test Active AI Key'}

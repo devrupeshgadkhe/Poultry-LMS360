@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { GoogleGenAI } from '@google/genai';
 import { keyPool } from './keyPool.js';
 import { INVOICE_PARSER_SCHEMA } from './aiSchemas.js';
 
@@ -260,12 +261,15 @@ Strictly conform the output to the requested JSON schema.`
   async testKey(req: Request, res: Response) {
     try {
       const { apiKey } = req.body || {};
-      const targetClient = apiKey
-        ? new (require('@google/genai').GoogleGenAI)({ apiKey: apiKey.trim() })
-        : keyPool.getNextClient()?.client;
+      let targetClient: GoogleGenAI | undefined;
+      if (apiKey && typeof apiKey === 'string' && apiKey.trim().length > 10) {
+        targetClient = new GoogleGenAI({ apiKey: apiKey.trim() });
+      } else {
+        targetClient = keyPool.getNextClient()?.client;
+      }
 
       if (!targetClient) {
-        return res.status(400).json({ success: false, error: 'No API key provided or configured to test.' });
+        return res.status(400).json({ success: false, error: 'No API key provided or configured to test. Please add a key first.' });
       }
 
       const response = await targetClient.models.generateContent({
