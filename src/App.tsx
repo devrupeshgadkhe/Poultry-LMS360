@@ -28,7 +28,8 @@ import {
   EyeOff,
   CheckCircle2,
   Layers,
-  History
+  History,
+  Terminal
 } from 'lucide-react';
 import farmHeroImage from './assets/images/poultry_farm_hero_1789227033408.jpg';
 
@@ -66,6 +67,7 @@ type Tab =
   | 'Milling & Mix'
   | 'Finance Ledgers'
   | 'Super Admin Console'
+  | 'Developer Tools'
   | 'Legacy Migrator'
   | 'User Access'
   | 'Backups'
@@ -424,6 +426,7 @@ export default function App() {
     { name: 'Reports & Ledgers', icon: BarChart3, permission: 'reports.view' },
     { name: 'Bulk Data Import', icon: FileSpreadsheet, roles: ['Developer', 'Admin'], permission: 'bulkimport.view' },
     { name: 'Super Admin Console', icon: Shield, roles: ['Developer'] },
+    { name: 'Developer Tools', icon: Terminal, roles: ['Developer'] },
     { name: 'Legacy Migrator', icon: Database, roles: ['Developer'] },
     { name: 'User Access', icon: Key, roles: ['Developer', 'Admin', 'Staff', 'Worker'] },
     { name: 'Backups', icon: Cloud, roles: ['Developer', 'Admin'], permission: 'settings.view' },
@@ -803,11 +806,16 @@ export default function App() {
         return <Reports currentLanguage={currentLanguage} />;
       case 'Backups':
         return <Backups currentLanguage={currentLanguage} />;
+      case 'Developer Tools':
+        if (userRole !== 'Developer') {
+          return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
+        }
+        return <DeveloperTools currentLanguage={currentLanguage} />;
       case 'Audit Logs':
         if (userRole !== 'Developer') {
           return <Dashboard currentLanguage={currentLanguage} setCurrentLanguage={(lang: Language) => { setCurrentLanguage(lang); localStorage.setItem('poultry_lang', lang); }} />;
         }
-        return <SettingsAudit currentLanguage={currentLanguage} />;
+        return <DeveloperTools currentLanguage={currentLanguage} />;
       case 'Farm Settings & Access':
         return <SettingsAudit currentLanguage={currentLanguage} />;
       case 'Bulk Data Import':

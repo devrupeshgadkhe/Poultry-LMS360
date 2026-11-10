@@ -181,5 +181,109 @@ Strictly conform the output to the requested JSON schema.`
       invoice: parsedInvoice,
       modelUsed: successfulModel
     });
+  },
+
+  /**
+   * GET /api/developer/gemini-keys
+   * Strictly Developer Only: List all configured keys (masked) and status
+   */
+  async listKeys(req: Request, res: Response) {
+    try {
+      const keys = keyPool.getMaskedKeys();
+      return res.json({
+        success: true,
+        keys,
+        total: keys.length,
+        hasAvailableKey: keyPool.hasAvailableKey()
+      });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message || 'Failed to list API keys' });
+    }
+  },
+
+  /**
+   * POST /api/developer/gemini-keys
+   * Strictly Developer Only: Add a new key to the pool
+   */
+  async addKey(req: Request, res: Response) {
+    try {
+      const { apiKey } = req.body || {};
+      if (!apiKey || typeof apiKey !== 'string') {
+        return res.status(400).json({ error: 'Please provide a valid Gemini API key.' });
+      }
+
+      const result = keyPool.addKey(apiKey);
+      if (!result.success) {
+        return res.status(400).json({ error: result.message });
+      }
+
+      return res.json({
+        success: true,
+        message: result.message,
+        keys: keyPool.getMaskedKeys()
+      });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message || 'Failed to save API key' });
+    }
+  },
+
+  /**
+   * DELETE /api/developer/gemini-keys/:id
+   * Strictly Developer Only: Remove an API key from the pool
+   */
+  async removeKey(req: Request, res: Response) {
+    try {
+      const keyId = req.params.id;
+      if (!keyId) {
+        return res.status(400).json({ error: 'Missing key ID.' });
+      }
+
+      const result = keyPool.removeKeyById(keyId);
+      if (!result.success) {
+        return res.status(400).json({ error: result.message });
+      }
+
+      return res.json({
+        success: true,
+        message: result.message,
+        keys: keyPool.getMaskedKeys()
+      });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message || 'Failed to remove API key' });
+    }
+  },
+
+  /**
+   * POST /api/developer/gemini-keys/test
+   * Strictly Developer Only: Test key connectivity
+   */
+  async testKey(req: Request, res: Response) {
+    try {
+      const { apiKey } = req.body || {};
+      const targetClient = apiKey
+        ? new (require('@google/genai').GoogleGenAI)({ apiKey: apiKey.trim() })
+        : keyPool.getNextClient()?.client;
+
+      if (!targetClient) {
+        return res.status(400).json({ success: false, error: 'No API key provided or configured to test.' });
+      }
+
+      const response = await targetClient.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents: 'Hello, respond with OK.',
+        config: { maxOutputTokens: 5 }
+      });
+
+      return res.json({
+        success: true,
+        message: 'API Key is verified and operational!',
+        reply: response.text ? response.text.trim() : 'OK'
+      });
+    } catch (err: any) {
+      return res.status(400).json({
+        success: false,
+        error: err.message || 'Failed to verify API key with Google Gemini service.'
+      });
+    }
   }
 };

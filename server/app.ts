@@ -367,6 +367,12 @@ apiRouter.post('/migration/execute', migrationControllers.executeMigration);
 apiRouter.post('/developer/hard-reset', developerControllers.hardReset);
 apiRouter.post('/developer/form-hard-reset', developerControllers.formHardReset);
 
+// Developer Gemini API Key Pool Management (Strictly Developer Login Only)
+apiRouter.get('/developer/gemini-keys', aiControllers.listKeys);
+apiRouter.post('/developer/gemini-keys', aiControllers.addKey);
+apiRouter.delete('/developer/gemini-keys/:id', aiControllers.removeKey);
+apiRouter.post('/developer/gemini-keys/test', aiControllers.testKey);
+
 // System Heartbeat endpoint (Records live keep-alive entries in AuditLogs and resets Supabase 7-day inactivity)
 apiRouter.all('/system/heartbeat', async (req, res) => {
   try {

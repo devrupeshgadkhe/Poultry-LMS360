@@ -138,6 +138,76 @@ class GeminiKeyPoolManager {
   public getKeyCount(): number {
     return this.keys.length;
   }
+
+  public getMaskedKeys(): { id: string; label: string; maskedKey: string; isEnv: boolean; failedCount: number; cooldownUntil: number }[] {
+    const fileKeys = this.readFileKeys();
+    return this.keys.map(k => {
+      const isFileKey = fileKeys.includes(k.key);
+      const isEnv = !isFileKey && (k.key === process.env.GEMINI_API_KEY || k.key === process.env.API_KEY || Boolean(process.env[`GEMINI_API_KEY_${k.id}`]));
+      const len = k.key.length;
+      const masked = len > 8 
+        ? `${k.key.substring(0, 4)}...${k.key.substring(len - 4)}` 
+        : '****';
+      return {
+        id: k.id,
+        label: k.label,
+        maskedKey: masked,
+        isEnv,
+        failedCount: k.failedCount,
+        cooldownUntil: k.cooldownUntil
+      };
+    });
+  }
+
+  public readFileKeys(): string[] {
+    const keyFilePath = path.join(process.cwd(), 'data', 'gemini_keys.txt');
+    if (!fs.existsSync(keyFilePath)) return [];
+    try {
+      const content = fs.readFileSync(keyFilePath, 'utf8');
+      return content
+        .split(/[\r\n,]+/)
+        .map(k => k.trim())
+        .filter(k => k.length > 10 && !k.startsWith('#'));
+    } catch {
+      return [];
+    }
+  }
+
+  public saveFileKeys(keys: string[]) {
+    const dataDir = path.join(process.cwd(), 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const keyFilePath = path.join(dataDir, 'gemini_keys.txt');
+    const unique = Array.from(new Set(keys.map(k => k.trim()).filter(k => k.length > 10)));
+    fs.writeFileSync(keyFilePath, unique.join('\n') + (unique.length > 0 ? '\n' : ''), 'utf8');
+    this.initKeys();
+  }
+
+  public addKey(newKey: string): { success: boolean; message: string } {
+    const trimmed = newKey.trim();
+    if (trimmed.length < 15) {
+      return { success: false, message: 'Invalid API key format. Key must be at least 15 characters.' };
+    }
+    const currentFileKeys = this.readFileKeys();
+    if (currentFileKeys.includes(trimmed)) {
+      return { success: false, message: 'This API key is already configured in the pool.' };
+    }
+    currentFileKeys.push(trimmed);
+    this.saveFileKeys(currentFileKeys);
+    return { success: true, message: 'API key added successfully to the Gemini key pool.' };
+  }
+
+  public removeKeyById(id: string): { success: boolean; message: string } {
+    const target = this.keys.find(k => k.id === id);
+    if (!target) {
+      return { success: false, message: 'Key not found in pool.' };
+    }
+    const currentFileKeys = this.readFileKeys();
+    const updated = currentFileKeys.filter(k => k !== target.key);
+    this.saveFileKeys(updated);
+    return { success: true, message: 'API key removed successfully.' };
+  }
 }
 
 export const keyPool = new GeminiKeyPoolManager();

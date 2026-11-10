@@ -7,3 +7,4 @@ coverage/
 .env*
 !.env.example
 public/assets/aistudio/
+data/gemini_keys.txt

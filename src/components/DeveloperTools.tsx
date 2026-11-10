@@ -11,7 +11,13 @@ import {
   AlertTriangle,
   RotateCcw,
   CheckCircle2,
-  Building2
+  Building2,
+  Key,
+  Plus,
+  Check,
+  Eye,
+  EyeOff,
+  AlertCircle
 } from 'lucide-react';
 import { translations, Language } from '../translations';
 
@@ -19,7 +25,17 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
   const t = translations[currentLanguage];
   
   // Developer Tools tab navigation
-  const [activeDevTab, setActiveDevTab] = useState<'audit' | 'errors' | 'hard-reset'>('audit');
+  const [activeDevTab, setActiveDevTab] = useState<'gemini-keys' | 'audit' | 'errors' | 'hard-reset'>('gemini-keys');
+
+  // Gemini API Keys State
+  const [geminiKeys, setGeminiKeys] = useState<any[]>([]);
+  const [loadingKeys, setLoadingKeys] = useState(false);
+  const [newApiKey, setNewApiKey] = useState('');
+  const [keyInputVisible, setKeyInputVisible] = useState(false);
+  const [addingKey, setAddingKey] = useState(false);
+  const [keyActionMsg, setKeyActionMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [testingKeyId, setTestingKeyId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ [id: string]: { success: boolean; message: string } }>({});
 
   // Audit Logs State
   const [audits, setAudits] = useState<any[]>([]);
@@ -40,10 +56,91 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
   const [resetResult, setResetResult] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
+    fetchKeys();
     fetchAudits();
     fetchErrors();
     fetchFarms();
   }, []);
+
+  const fetchKeys = async () => {
+    try {
+      setLoadingKeys(true);
+      const res = await fetch('/api/developer/gemini-keys');
+      if (res.ok) {
+        const data = await res.json();
+        setGeminiKeys(data.keys || []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch Gemini keys:', e);
+    } finally {
+      setLoadingKeys(false);
+    }
+  };
+
+  const handleAddKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newApiKey.trim()) return;
+    setAddingKey(true);
+    setKeyActionMsg(null);
+    try {
+      const res = await fetch('/api/developer/gemini-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: newApiKey.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setKeyActionMsg({ type: 'error', text: data.error || 'Failed to add API key' });
+      } else {
+        setKeyActionMsg({ type: 'success', text: data.message || 'Key added successfully!' });
+        setNewApiKey('');
+        setGeminiKeys(data.keys || []);
+      }
+    } catch (err: any) {
+      setKeyActionMsg({ type: 'error', text: err.message || 'Network error while adding key' });
+    } finally {
+      setAddingKey(false);
+    }
+  };
+
+  const handleRemoveKey = async (id: string, label: string) => {
+    setKeyActionMsg(null);
+    try {
+      const res = await fetch(`/api/developer/gemini-keys/${id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setKeyActionMsg({ type: 'error', text: data.error || 'Failed to remove API key' });
+      } else {
+        setKeyActionMsg({ type: 'success', text: data.message || 'Key removed successfully' });
+        setGeminiKeys(data.keys || []);
+      }
+    } catch (err: any) {
+      setKeyActionMsg({ type: 'error', text: err.message || 'Network error while removing key' });
+    }
+  };
+
+  const handleTestKey = async (id: string, isEnv: boolean) => {
+    setTestingKeyId(id);
+    try {
+      const res = await fetch('/api/developer/gemini-keys/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTestResult(prev => ({ ...prev, [id]: { success: true, message: 'Verified (Connected)' } }));
+      } else {
+        setTestResult(prev => ({ ...prev, [id]: { success: false, message: data.error || 'Connection check failed' } }));
+      }
+    } catch (e: any) {
+      setTestResult(prev => ({ ...prev, [id]: { success: false, message: e.message || 'Network test failed' } }));
+    } finally {
+      setTestingKeyId(null);
+    }
+  };
 
   const fetchFarms = async () => {
     try {
@@ -132,7 +229,6 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
   };
 
   const handleClearErrors = async () => {
-    if (!window.confirm('Are you sure you want to clear all logged JavaScript and runtime errors?')) return;
     try {
       const res = await fetch('/api/errors', { method: 'DELETE' });
       if (res.ok) {
@@ -160,6 +256,21 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
 
       {/* Internal Navigation Sub-tabs */}
       <div className="flex border-b border-slate-200 gap-1 overflow-x-auto pb-px">
+        <button
+          onClick={() => {
+            setActiveDevTab('gemini-keys');
+            fetchKeys();
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold font-mono border-b-2 tracking-wide whitespace-nowrap smooth-hover ${
+            activeDevTab === 'gemini-keys'
+              ? 'border-emerald-600 text-emerald-700 bg-emerald-50/50'
+              : 'border-transparent text-slate-500 hover:text-slate-850'
+          }`}
+          id="tab-btn-gemini-keys"
+        >
+          <Key className="h-4 w-4 text-emerald-600" />
+          Gemini API Keys ({geminiKeys.length})
+        </button>
         <button
           onClick={() => {
             setActiveDevTab('audit');
@@ -207,6 +318,212 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
           Data Wipe & Hard Reset
         </button>
       </div>
+
+      {/* TAB: GEMINI API KEYS POOL (DEVELOPER ONLY) */}
+      {activeDevTab === 'gemini-keys' && (
+        <div className="space-y-6 animate-fade-in" id="gemini-keys-panel">
+          {/* Header Card */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <span className="p-2 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100">
+                    <Key className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 font-display">Gemini API Key Pool Configuration</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Configure Google Gemini API keys for AI Photo & PDF Purchase Bill Scanning. Strictly restricted to Developer Login.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={fetchKeys}
+                  disabled={loadingKeys}
+                  className="px-3 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  title="Reload configured keys"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${loadingKeys ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleTestKey('pool', false)}
+                  disabled={Boolean(testingKeyId)}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                  title="Run live AI ping test"
+                >
+                  <CheckCircle2 className={`h-3.5 w-3.5 ${testingKeyId === 'pool' ? 'animate-spin' : ''}`} />
+                  {testingKeyId === 'pool' ? 'Testing Connection...' : 'Test Active AI Key'}
+                </button>
+              </div>
+            </div>
+
+            {/* Test result banner */}
+            {testResult['pool'] && (
+              <div className={`p-4 rounded-xl border text-xs flex items-center gap-2.5 animate-fade-in ${
+                testResult['pool'].success 
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}>
+                {testResult['pool'].success ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                )}
+                <span className="font-medium">{testResult['pool'].message}</span>
+              </div>
+            )}
+
+            {/* Key Action Message */}
+            {keyActionMsg && (
+              <div className={`p-3.5 rounded-xl border text-xs flex items-center justify-between animate-fade-in ${
+                keyActionMsg.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}>
+                <span>{keyActionMsg.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setKeyActionMsg(null)}
+                  className="text-slate-400 hover:text-slate-600 text-xs font-bold ml-2"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Add New Key Form */}
+            <form onSubmit={handleAddKey} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                  <Plus className="h-3.5 w-3.5 text-emerald-600" />
+                  Add New Gemini API Key to Pool
+                </label>
+                <span className="text-[11px] text-slate-500">
+                  Multiple keys rotate automatically on quota limits
+                </span>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <div className="relative flex-1">
+                  <input
+                    type={keyInputVisible ? 'text' : 'password'}
+                    value={newApiKey}
+                    onChange={(e) => setNewApiKey(e.target.value)}
+                    placeholder="Enter your Gemini API key (e.g. AIzaSy...)"
+                    className="w-full px-3.5 py-2.5 pr-10 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setKeyInputVisible(!keyInputVisible)}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    title={keyInputVisible ? 'Hide key' : 'Show key'}
+                  >
+                    {keyInputVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <button
+                  type="submit"
+                  disabled={addingKey || !newApiKey.trim()}
+                  className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold font-mono tracking-wide flex items-center justify-center gap-1.5 transition cursor-pointer shrink-0"
+                >
+                  <Plus className="h-4 w-4" />
+                  {addingKey ? 'Adding Key...' : 'Add to Pool'}
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                You can obtain free API keys from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline font-semibold">Google AI Studio</a>. Add as many keys as needed for high-volume automated invoice processing.
+              </p>
+            </form>
+
+            {/* List of Configured Keys */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                  Active Server Key Pool ({geminiKeys.length} {geminiKeys.length === 1 ? 'key' : 'keys'})
+                </h4>
+                {geminiKeys.length === 0 && (
+                  <span className="text-xs font-semibold text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200">
+                    No API keys active!
+                  </span>
+                )}
+              </div>
+
+              {loadingKeys ? (
+                <div className="py-8 text-center text-xs text-slate-500 font-mono">
+                  Loading configured keys...
+                </div>
+              ) : geminiKeys.length === 0 ? (
+                <div className="py-8 px-4 text-center bg-amber-50/60 border border-amber-200/80 rounded-2xl text-xs text-amber-800 space-y-2">
+                  <AlertCircle className="h-6 w-6 text-amber-600 mx-auto" />
+                  <p className="font-bold">No Gemini API keys are currently configured on the server.</p>
+                  <p className="text-slate-600 max-w-md mx-auto">
+                    To use the photo/PDF purchase bill scanner, please paste at least one valid Gemini API key in the box above and click "Add to Pool".
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 border border-slate-200/80 rounded-2xl overflow-hidden bg-white">
+                  {geminiKeys.map((item, idx) => {
+                    const isCoolingDown = item.cooldownUntil && item.cooldownUntil > Date.now();
+                    return (
+                      <div key={item.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/60 transition">
+                        <div className="flex items-center gap-3">
+                          <span className="w-7 h-7 rounded-lg bg-slate-100 text-slate-700 font-mono text-xs font-bold flex items-center justify-center shrink-0">
+                            #{idx + 1}
+                          </span>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-bold text-xs text-slate-800 tracking-wide">
+                                {item.maskedKey}
+                              </span>
+                              {item.isEnv && (
+                                <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  Server Env
+                                </span>
+                              )}
+                              {isCoolingDown ? (
+                                <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-amber-50 text-amber-700 border border-amber-200">
+                                  Quota Cooldown
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  Ready
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              {item.label} • Failures: {item.failedCount || 0}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 self-end sm:self-center">
+                          {!item.isEnv ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveKey(item.id, item.label)}
+                              className="px-2.5 py-1.5 border border-slate-200 hover:border-red-300 hover:bg-red-50 text-slate-500 hover:text-red-700 rounded-lg text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                              title="Delete key from pool"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Remove
+                            </button>
+                          ) : (
+                            <span className="text-[11px] text-slate-400 italic px-2">Managed via System Env</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {activeDevTab === 'audit' && (
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden animate-fade-in" id="audit-trail-panel">

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useFarm } from '../context/FarmContext';
 import { checkSupabaseConnection, supabase } from '../lib/supabase';
-import { Building2, Plus, CheckCircle2, AlertCircle, RefreshCw, Users, Shield, ArrowRight, Eye, Phone, Mail, MapPin, Database } from 'lucide-react';
+import { Building2, Plus, CheckCircle2, AlertCircle, RefreshCw, Users, Shield, ArrowRight, Eye, Phone, Mail, MapPin, Database, Key } from 'lucide-react';
 import LegacyMigrator from './LegacyMigrator';
+import DeveloperTools from './DeveloperTools';
 
 interface FarmStats {
   farmId: number;
@@ -20,7 +21,7 @@ export const SuperAdminConsole: React.FC = () => {
     message: ''
   });
   const [isCheckingConn, setIsCheckingConn] = useState(false);
-  const [adminView, setAdminView] = useState<'farms' | 'migrator'>('farms');
+  const [adminView, setAdminView] = useState<'farms' | 'migrator' | 'gemini-keys'>('farms');
 
   // New Farm Form State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -196,10 +197,25 @@ export const SuperAdminConsole: React.FC = () => {
           <Database className="w-4 h-4" />
           Legacy Data Migrator
         </button>
+        <button
+          onClick={() => setAdminView('gemini-keys')}
+          className={`px-4 py-2 text-xs font-bold rounded-xl transition flex items-center gap-2 ${
+            adminView === 'gemini-keys'
+              ? 'bg-emerald-600 text-white shadow-sm'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Key className="w-4 h-4" />
+          Gemini API Keys & Pool
+        </button>
       </div>
 
       {adminView === 'migrator' ? (
         <LegacyMigrator userRole="Developer" />
+      ) : adminView === 'gemini-keys' ? (
+        <div className="pt-2">
+          <DeveloperTools currentLanguage="en" />
+        </div>
       ) : (
         <>
       {/* Cloud Connectivity Status Alert */}
