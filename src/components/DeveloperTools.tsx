@@ -336,6 +336,12 @@ export default function DeveloperTools({ currentLanguage = 'en' }: { currentLang
                     <p className="text-xs text-slate-500 mt-0.5">
                       Configure Google Gemini API keys for AI Photo & PDF Purchase Bill Scanning. Strictly restricted to Developer Login.
                     </p>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <Globe className="h-3 w-3" />
+                        Synchronized across Android Mobile, Desktop & Web
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>

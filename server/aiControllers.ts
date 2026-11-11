@@ -3,11 +3,10 @@ import { GoogleGenAI } from '@google/genai';
 import { keyPool } from './keyPool.js';
 import { INVOICE_PARSER_SCHEMA } from './aiSchemas.js';
 
-// Multi-Model rotation fallback chain in order of preference
+// Valid Gemini models in order of speed and capability
 const CANDIDATE_MODELS = [
   'gemini-3.8-flash',
-  'gemini-3.5-flash-lite',
-  'gemini-3.5-flash',
+  'gemini-3.1-flash-lite',
   'gemini-flash-latest'
 ];
 
@@ -17,18 +16,24 @@ export const aiControllers = {
    * Ultra-low-cost connectivity & quota verification probe (1 token maxOutput)
    */
   async getQuotaStatus(req: Request, res: Response) {
+    await keyPool.ensureSynced();
     const instance = keyPool.getNextClient();
     if (!instance) {
       return res.json({ available: false, reason: 'NO_API_KEY_CONFIGURED' });
     }
 
     try {
-      // 1-token health check on low latency flash model
-      await instance.client.models.generateContent({
-        model: 'gemini-3.5-flash-lite',
+      // 1-token health check on low latency flash model with 8-second timeout
+      const probePromise = instance.client.models.generateContent({
+        model: 'gemini-3.1-flash-lite',
         contents: 'ping',
         config: { maxOutputTokens: 1 }
       });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Quota probe timeout')), 8000)
+      );
+
+      await Promise.race([probePromise, timeoutPromise]);
       return res.json({ available: true, quotaExceeded: false });
     } catch (err: any) {
       const status = err.status || err.code || (err.error && err.error.code);
@@ -63,9 +68,12 @@ export const aiControllers = {
       return res.status(400).json({ error: 'Unsupported format. Please upload JPG, PNG, WEBP, or PDF.' });
     }
 
+    // Ensure synced with cloud keys before picking a client
+    await keyPool.ensureSynced();
+
     const clientInfo = keyPool.getNextClient();
     if (!clientInfo) {
-      return res.status(503).json({ error: 'Gemini AI API key is not configured on the server.' });
+      return res.status(503).json({ error: 'Gemini AI API key is not configured on the server. Please add a key in Developer Tools.' });
     }
 
     // Clean base64 string if data URL prefix exists
@@ -117,11 +125,11 @@ Strictly conform the output to the requested JSON schema.`
     let successfulModel: string | null = null;
     let lastError: any = null;
 
-    // Failover across candidate models
+    // Failover across candidate models with a 22-second per-attempt timeout
     for (let i = 0; i < CANDIDATE_MODELS.length; i++) {
       const currentModel = CANDIDATE_MODELS[i];
       try {
-        const response = await clientInfo.client.models.generateContent({
+        const generatePromise = clientInfo.client.models.generateContent({
           model: currentModel,
           contents: payloadParts,
           config: {
@@ -129,6 +137,12 @@ Strictly conform the output to the requested JSON schema.`
             responseSchema: INVOICE_PARSER_SCHEMA
           }
         });
+
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout: Model ${currentModel} exceeded 22 seconds`)), 22000)
+        );
+
+        const response: any = await Promise.race([generatePromise, timeoutPromise]);
 
         const rawJson = response.text?.trim() || '{}';
         parsedInvoice = JSON.parse(rawJson);
@@ -151,7 +165,7 @@ Strictly conform the output to the requested JSON schema.`
           break;
         }
 
-        // 200ms brief pause before candidate model failover
+        // Brief pause before trying next candidate model
         if (i < CANDIDATE_MODELS.length - 1) {
           await new Promise(r => setTimeout(r, 200));
           continue;
@@ -190,6 +204,7 @@ Strictly conform the output to the requested JSON schema.`
    */
   async listKeys(req: Request, res: Response) {
     try {
+      await keyPool.ensureSynced();
       const keys = keyPool.getMaskedKeys();
       return res.json({
         success: true,
@@ -213,7 +228,7 @@ Strictly conform the output to the requested JSON schema.`
         return res.status(400).json({ error: 'Please provide a valid Gemini API key.' });
       }
 
-      const result = keyPool.addKey(apiKey);
+      const result = await keyPool.addKey(apiKey);
       if (!result.success) {
         return res.status(400).json({ error: result.message });
       }
@@ -239,7 +254,7 @@ Strictly conform the output to the requested JSON schema.`
         return res.status(400).json({ error: 'Missing key ID.' });
       }
 
-      const result = keyPool.removeKeyById(keyId);
+      const result = await keyPool.removeKeyById(keyId);
       if (!result.success) {
         return res.status(400).json({ error: result.message });
       }
@@ -260,6 +275,7 @@ Strictly conform the output to the requested JSON schema.`
    */
   async testKey(req: Request, res: Response) {
     try {
+      await keyPool.ensureSynced();
       const { apiKey } = req.body || {};
       let targetClient: GoogleGenAI | undefined;
       if (apiKey && typeof apiKey === 'string' && apiKey.trim().length > 10) {
@@ -273,7 +289,7 @@ Strictly conform the output to the requested JSON schema.`
       }
 
       const response = await targetClient.models.generateContent({
-        model: 'gemini-3.5-flash-lite',
+        model: 'gemini-3.1-flash-lite',
         contents: 'Hello, respond with OK.',
         config: { maxOutputTokens: 5 }
       });

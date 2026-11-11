@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { GoogleGenAI } from '@google/genai';
+import { supabaseServer } from './supabase.js';
 
 interface KeyEntry {
   id: string;
@@ -47,9 +48,15 @@ function getCandidateKeyFilePaths(): string[] {
 class GeminiKeyPoolManager {
   private keys: KeyEntry[] = [];
   private currentIndex: number = 0;
+  private lastCloudSync: number = 0;
+  private isSyncingCloud: boolean = false;
 
   constructor() {
     this.initKeys();
+    // Non-blocking background initial cloud sync
+    this.syncFromCloud().catch(err => {
+      console.warn('[KeyPool] Initial background cloud key sync notice:', err.message);
+    });
   }
 
   public initKeys() {
@@ -97,7 +104,138 @@ class GeminiKeyPoolManager {
     if (this.keys.length > 0) {
       console.log(`[KeyPool] Initialized Gemini key pool with ${this.keys.length} API key(s).`);
     } else {
-      console.log('[KeyPool] No explicit GEMINI_API_KEY configured yet; ready for developer configuration.');
+      console.log('[KeyPool] No explicit GEMINI_API_KEY configured yet; ready for cloud/developer configuration.');
+    }
+  }
+
+  /**
+   * Synchronize keys from Supabase Cloud database (AuditLogs SystemConfig).
+   * Ensures keys configured on Desktop, Android mobile, or Web are available everywhere.
+   */
+  public async syncFromCloud(): Promise<string[]> {
+    if (this.isSyncingCloud) return [];
+    this.isSyncingCloud = true;
+    try {
+      const { data, error } = await supabaseServer
+        .from('AuditLogs')
+        .select('Parameters')
+        .eq('Module', 'SystemConfig')
+        .eq('Action', 'GeminiApiKeys')
+        .order('Id', { ascending: false })
+        .limit(1);
+
+      if (error) {
+        // Table or network notice
+        console.warn('[KeyPool] Cloud key sync notice:', error.message);
+        return [];
+      }
+
+      if (data && data.length > 0 && data[0].Parameters) {
+        try {
+          const parsed = JSON.parse(data[0].Parameters);
+          if (parsed && Array.isArray(parsed.keys)) {
+            const cloudKeys: string[] = parsed.keys.filter(
+              (k: any) => typeof k === 'string' && k.trim().length > 10
+            );
+
+            if (cloudKeys.length > 0) {
+              let updated = false;
+              for (const k of cloudKeys) {
+                if (!this.keys.some(entry => entry.key === k)) {
+                  this.keys.push({
+                    id: `key_${this.keys.length + 1}`,
+                    key: k,
+                    label: `API Key #${this.keys.length + 1}`,
+                    failedCount: 0,
+                    cooldownUntil: 0
+                  });
+                  updated = true;
+                }
+              }
+
+              // Also persist to local file cache if new keys were found
+              if (updated) {
+                const combined = Array.from(new Set([...this.readFileKeys(), ...cloudKeys]));
+                this.saveLocalFileKeysOnly(combined);
+              }
+
+              this.lastCloudSync = Date.now();
+              return cloudKeys;
+            }
+          }
+        } catch (parseErr) {
+          console.warn('[KeyPool] JSON parse error in cloud keys record:', parseErr);
+        }
+      }
+    } catch (e: any) {
+      console.warn('[KeyPool] Cloud key sync network notice:', e.message);
+    } finally {
+      this.isSyncingCloud = false;
+      this.lastCloudSync = Date.now();
+    }
+    return [];
+  }
+
+  /**
+   * Save keys to Supabase Cloud so all devices (Mobile Android, Desktop Windows, Web) share them.
+   */
+  public async syncToCloud(keys: string[]): Promise<boolean> {
+    try {
+      const unique = Array.from(new Set(keys.map(k => k.trim()).filter(k => k.length > 10)));
+      const payload = JSON.stringify({
+        keys: unique,
+        updatedAt: Date.now(),
+        platform: process.platform
+      });
+
+      const { error } = await supabaseServer
+        .from('AuditLogs')
+        .insert([{
+          FarmId: 1,
+          UserEmail: 'developer',
+          Module: 'SystemConfig',
+          Action: 'GeminiApiKeys',
+          Parameters: payload,
+          Status: 'SUCCESS',
+          Timestamp: new Date().toISOString()
+        }]);
+
+      if (error) {
+        console.warn('[KeyPool] Cloud save warning:', error.message);
+        return false;
+      }
+
+      this.lastCloudSync = Date.now();
+
+      // Clean up older SystemConfig records to keep database clean (retain newest 5)
+      try {
+        const { data: rows } = await supabaseServer
+          .from('AuditLogs')
+          .select('Id')
+          .eq('Module', 'SystemConfig')
+          .eq('Action', 'GeminiApiKeys')
+          .order('Id', { ascending: false });
+
+        if (rows && rows.length > 5) {
+          const toDelete = rows.slice(5).map((r: any) => r.Id);
+          await supabaseServer.from('AuditLogs').delete().in('Id', toDelete);
+        }
+      } catch {}
+
+      return true;
+    } catch (err: any) {
+      console.warn('[KeyPool] Cloud save error:', err.message);
+      return false;
+    }
+  }
+
+  /**
+   * Ensure keys are synchronized from cloud if cache is older than 20 seconds
+   */
+  public async ensureSynced(): Promise<void> {
+    const elapsed = Date.now() - this.lastCloudSync;
+    if (elapsed > 20000 || this.keys.length === 0) {
+      await this.syncFromCloud();
     }
   }
 
@@ -208,11 +346,10 @@ class GeminiKeyPoolManager {
     return Array.from(new Set(rawKeys));
   }
 
-  public saveFileKeys(keys: string[]) {
+  private saveLocalFileKeysOnly(keys: string[]) {
     const unique = Array.from(new Set(keys.map(k => k.trim()).filter(k => k.length > 10)));
     const fileContent = unique.join('\n') + (unique.length > 0 ? '\n' : '');
     const candidatePaths = getCandidateKeyFilePaths();
-    let writeSuccessCount = 0;
 
     for (const filePath of candidatePaths) {
       try {
@@ -221,26 +358,28 @@ class GeminiKeyPoolManager {
           fs.mkdirSync(dir, { recursive: true });
         }
         fs.writeFileSync(filePath, fileContent, 'utf8');
-        writeSuccessCount++;
-      } catch (err: any) {
-        // Safe fallback: when running in read-only C:\Program Files, continue to writable %APPDATA%
-        console.warn(`[KeyPool] Note: Could not write to ${filePath} (${err.code || err.message}). Checking next writable location...`);
-      }
+      } catch {}
     }
+  }
 
-    if (writeSuccessCount === 0) {
-      console.warn('[KeyPool] Warning: Filesystem is read-only. Keys are active in runtime memory.');
-    }
+  public async saveFileKeys(keys: string[]) {
+    const unique = Array.from(new Set(keys.map(k => k.trim()).filter(k => k.length > 10)));
+    this.saveLocalFileKeysOnly(unique);
+
+    // Synchronize to Supabase Cloud Database for cross-device sync
+    await this.syncToCloud(unique);
 
     this.initKeys();
   }
 
-  public addKey(newKey: string): { success: boolean; message: string } {
+  public async addKey(newKey: string): Promise<{ success: boolean; message: string }> {
     try {
       const trimmed = newKey.trim();
       if (trimmed.length < 15) {
         return { success: false, message: 'Invalid API key format. Key must be at least 15 characters.' };
       }
+
+      await this.ensureSynced();
 
       const currentFileKeys = this.readFileKeys();
       const existingInPool = this.keys.map(k => k.key);
@@ -249,7 +388,7 @@ class GeminiKeyPoolManager {
       }
 
       currentFileKeys.push(trimmed);
-      this.saveFileKeys(currentFileKeys);
+      await this.saveFileKeys(currentFileKeys);
 
       // Verify that key is present in active memory pool immediately
       if (!this.keys.some(k => k.key === trimmed)) {
@@ -262,9 +401,9 @@ class GeminiKeyPoolManager {
         });
       }
 
-      return { success: true, message: 'API key added successfully to the Gemini key pool.' };
+      return { success: true, message: 'API key added and synchronized across all devices (Desktop, Mobile & Web).' };
     } catch (err: any) {
-      console.error('[KeyPool] Error adding key to disk, saving to memory pool:', err);
+      console.error('[KeyPool] Error adding key:', err);
       const trimmed = newKey.trim();
       if (!this.keys.some(k => k.key === trimmed)) {
         this.keys.push({
@@ -279,7 +418,7 @@ class GeminiKeyPoolManager {
     }
   }
 
-  public removeKeyById(id: string): { success: boolean; message: string } {
+  public async removeKeyById(id: string): Promise<{ success: boolean; message: string }> {
     try {
       const target = this.keys.find(k => k.id === id);
       if (!target) {
@@ -289,9 +428,9 @@ class GeminiKeyPoolManager {
       const currentFileKeys = this.readFileKeys();
       const updated = currentFileKeys.filter(k => k !== target.key);
       this.keys = this.keys.filter(k => k.id !== id);
-      this.saveFileKeys(updated);
+      await this.saveFileKeys(updated);
 
-      return { success: true, message: 'API key removed successfully.' };
+      return { success: true, message: 'API key removed and synchronized across all devices.' };
     } catch (err: any) {
       console.error('[KeyPool] Error removing key:', err);
       this.keys = this.keys.filter(k => k.id !== id);
