@@ -17,14 +17,16 @@ import {
   FileText, 
   RotateCcw, 
   ChevronDown, 
-  ChevronUp, 
+  ChevronUp,
   BadgeIndianRupee,
-  Camera
+  Camera,
+  PackagePlus
 } from 'lucide-react';
 import { Supplier, Inventory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { purchaseService, stakeholderService, inventoryService } from '../lib/dataService';
+import { supabase } from '../lib/supabase';
 import { InvoiceUploadModal } from './InvoiceUploadModal';
 import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
 
@@ -36,6 +38,10 @@ interface PurchaseItem {
   GSTPercentage: number | string;
   WeightPerUnit: number | string;
   DiscountPercentage?: number | string;
+  isNewItem?: boolean;
+  suggestedName?: string;
+  suggestedCategory?: 'Feed' | 'Medicine' | 'Equipment' | 'Sales Item' | 'Raw Ingredient';
+  suggestedUnit?: string;
 }
 
 interface ExtraExpense {
@@ -43,6 +49,92 @@ interface ExtraExpense {
   Amount: number | string;
   AllocationMethod: 'ByValue' | 'ByWeight' | 'ByQuantity' | 'Equal';
   TargetInventoryId: string;
+}
+
+function detectCategoryAndUnit(name: string, rawUnit?: string): {
+  category: 'Feed' | 'Medicine' | 'Equipment' | 'Sales Item' | 'Raw Ingredient';
+  unit: string;
+} {
+  const lower = (name || '').toLowerCase();
+  const uLower = (rawUnit || '').toLowerCase();
+
+  let category: 'Feed' | 'Medicine' | 'Equipment' | 'Sales Item' | 'Raw Ingredient' = 'Feed';
+  if (
+    lower.includes('vaccin') ||
+    lower.includes('lasota') ||
+    lower.includes('ibd') ||
+    lower.includes('marek') ||
+    lower.includes('gumboro') ||
+    lower.includes('ranikhet') ||
+    lower.includes('fowl pox') ||
+    lower.includes('medic') ||
+    lower.includes('tablet') ||
+    lower.includes('syrup') ||
+    lower.includes('tonic') ||
+    lower.includes('calcium') ||
+    lower.includes('vitamin') ||
+    lower.includes('enro') ||
+    lower.includes('electral') ||
+    lower.includes('antibiotic') ||
+    lower.includes('disinfect') ||
+    lower.includes('powder')
+  ) {
+    category = 'Medicine';
+  } else if (
+    lower.includes('cage') ||
+    lower.includes('feeder') ||
+    lower.includes('drinker') ||
+    lower.includes('fan') ||
+    lower.includes('heater') ||
+    lower.includes('tray') ||
+    lower.includes('equipment') ||
+    lower.includes('bulb') ||
+    lower.includes('curtain') ||
+    lower.includes('sheet')
+  ) {
+    category = 'Equipment';
+  } else if (
+    lower.includes('soya') ||
+    lower.includes('doc') ||
+    lower.includes('maize') ||
+    lower.includes('rice') ||
+    lower.includes('bran') ||
+    lower.includes('deoiled') ||
+    lower.includes('mcp') ||
+    lower.includes('dcp') ||
+    lower.includes('limestone') ||
+    lower.includes('lysine') ||
+    lower.includes('methionine') ||
+    lower.includes('salt') ||
+    lower.includes('mineral')
+  ) {
+    category = 'Raw Ingredient';
+  } else if (
+    lower.includes('cull') ||
+    lower.includes('spent') ||
+    lower.includes('pullet')
+  ) {
+    category = 'Sales Item';
+  }
+
+  let unit = 'Kg';
+  if (uLower.includes('bag') || lower.includes('bag') || lower.includes('bora') || lower.includes('katt')) {
+    unit = 'Bag';
+  } else if (uLower.includes('ltr') || uLower.includes('litre') || uLower.includes('liter') || lower.includes('litre') || lower.includes('ltr')) {
+    unit = 'Litre';
+  } else if (uLower.includes('btl') || uLower.includes('bottle') || lower.includes('bottle') || lower.includes('vial')) {
+    unit = 'Bottle';
+  } else if (uLower.includes('box') || uLower.includes('carton') || uLower.includes('pkt') || uLower.includes('packet')) {
+    unit = 'Box';
+  } else if (uLower.includes('doz') || uLower.includes('dozen')) {
+    unit = 'Dozen';
+  } else if (uLower.includes('pcs') || uLower.includes('pc') || uLower.includes('nos') || uLower.includes('no') || uLower.includes('unit')) {
+    unit = 'Pcs';
+  } else if (uLower.includes('kg') || uLower.includes('kilo') || lower.includes('kg')) {
+    unit = 'Kg';
+  }
+
+  return { category, unit };
 }
 
 export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
@@ -129,6 +221,7 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
   const [isAiScanModalOpen, setIsAiScanModalOpen] = useState(false);
   const [isAiScanAvailable, setIsAiScanAvailable] = useState(true);
   const [aiScanSuccessBanner, setAiScanSuccessBanner] = useState<string | null>(null);
+  const [isRegisteringItems, setIsRegisteringItems] = useState(false);
 
   // Background probe of API key & quota status
   useEffect(() => {
@@ -217,6 +310,8 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
             return iName === sName || iName.includes(sName) || sName.includes(iName);
           });
 
+          const detected = detectCategoryAndUnit(itemName, item.unit);
+
           newItems.push({
             InventoryId: matchedInv ? String(matchedInv.Id) : '',
             ItemType: 'Inventory',
@@ -224,7 +319,11 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
             UnitPrice: Number(item.rate) >= 0 ? Number(item.rate) : 0,
             GSTPercentage: Number(item.gstRate) >= 0 ? Number(item.gstRate) : 0,
             WeightPerUnit: 1,
-            DiscountPercentage: Number(item.discount) >= 0 ? Number(item.discount) : 0
+            DiscountPercentage: Number(item.discount) >= 0 ? Number(item.discount) : 0,
+            isNewItem: !matchedInv,
+            suggestedName: itemName,
+            suggestedCategory: detected.category,
+            suggestedUnit: detected.unit
           });
 
           newRowSearch[idx] = matchedInv ? matchedInv.ItemName : itemName;
@@ -235,7 +334,7 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
       }
 
       setAiScanSuccessBanner(
-        `AI successfully scanned bill "${scanned.invoiceNumber || 'Invoice'}" from "${scanned.supplierName || 'Vendor'}" with ${scanned.items?.length || 0} line item(s). Please review before saving.`
+        `AI successfully scanned bill "${scanned.invoiceNumber || 'Invoice'}" from "${scanned.supplierName || 'Vendor'}" with ${scanned.items?.length || 0} line item(s). Please review and confirm new items before saving.`
       );
       setTimeout(() => setAiScanSuccessBanner(null), 10000);
 
@@ -246,6 +345,131 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
       }, 100);
     } catch (err: any) {
       console.error('Error auto-populating parsed invoice:', err);
+    }
+  };
+
+  /**
+   * Register a single detected new item from the bill into Inventories
+   */
+  const handleRegisterSingleItem = async (idx: number) => {
+    const item = items[idx];
+    if (!item) return;
+    const name = (item.suggestedName || rowSearchQueries[idx] || '').trim();
+    if (!name) {
+      alert('Please enter a product or item name first.');
+      return;
+    }
+    const detected = detectCategoryAndUnit(name, item.suggestedUnit);
+    const category = item.suggestedCategory || detected.category;
+    const unit = item.suggestedUnit || detected.unit;
+    const price = parseFloat(String(item.UnitPrice)) || 0;
+    const weight = parseFloat(String(item.WeightPerUnit)) || 1.0;
+
+    try {
+      setIsRegisteringItems(true);
+      const newInv = await inventoryService.createInventory(farmId, {
+        ItemName: name,
+        Category: category as any,
+        UnitOfMeasurement: unit,
+        UnitPrice: price,
+        SellingPrice: price > 0 ? price * 1.2 : 0,
+        CurrentStock: 0,
+        WeightPerUnit: weight,
+        MinThreshold: 10,
+        Notes: 'Added from purchase invoice bill'
+      });
+
+      const freshInvs = await inventoryService.getInventories(farmId);
+      setInventories(freshInvs);
+
+      const copy = [...items];
+      copy[idx] = {
+        ...copy[idx],
+        InventoryId: String(newInv.Id),
+        isNewItem: false,
+        suggestedName: newInv.ItemName,
+        suggestedCategory: newInv.Category as any,
+        suggestedUnit: newInv.UnitOfMeasurement
+      };
+      setItems(copy);
+
+      setRowSearchQueries(prev => ({
+        ...prev,
+        [idx]: newInv.ItemName
+      }));
+    } catch (err: any) {
+      console.error('Failed to register item:', err);
+      alert(err.message || 'Failed to add item to inventory.');
+    } finally {
+      setIsRegisteringItems(false);
+    }
+  };
+
+  /**
+   * Batch confirm and register all unlinked new items from the bill into Inventories
+   */
+  const handleRegisterAllNewItems = async () => {
+    const unlinkedIndices: number[] = [];
+    items.forEach((item, idx) => {
+      const name = (item.suggestedName || rowSearchQueries[idx] || '').trim();
+      if (!item.InventoryId && name) {
+        unlinkedIndices.push(idx);
+      }
+    });
+
+    if (unlinkedIndices.length === 0) {
+      alert('All items are already linked to the inventory registry.');
+      return;
+    }
+
+    try {
+      setIsRegisteringItems(true);
+      const copy = [...items];
+      const updatedSearch = { ...rowSearchQueries };
+
+      for (const idx of unlinkedIndices) {
+        const item = copy[idx];
+        const name = (item.suggestedName || rowSearchQueries[idx] || '').trim();
+        const detected = detectCategoryAndUnit(name, item.suggestedUnit);
+        const category = item.suggestedCategory || detected.category;
+        const unit = item.suggestedUnit || detected.unit;
+        const price = parseFloat(String(item.UnitPrice)) || 0;
+        const weight = parseFloat(String(item.WeightPerUnit)) || 1.0;
+
+        const newInv = await inventoryService.createInventory(farmId, {
+          ItemName: name,
+          Category: category as any,
+          UnitOfMeasurement: unit,
+          UnitPrice: price,
+          SellingPrice: price > 0 ? price * 1.2 : 0,
+          CurrentStock: 0,
+          WeightPerUnit: weight,
+          MinThreshold: 10,
+          Notes: 'Batch registered from purchase invoice'
+        });
+
+        copy[idx] = {
+          ...copy[idx],
+          InventoryId: String(newInv.Id),
+          isNewItem: false,
+          suggestedName: newInv.ItemName,
+          suggestedCategory: newInv.Category as any,
+          suggestedUnit: newInv.UnitOfMeasurement
+        };
+        updatedSearch[idx] = newInv.ItemName;
+      }
+
+      const freshInvs = await inventoryService.getInventories(farmId);
+      setInventories(freshInvs);
+      setItems(copy);
+      setRowSearchQueries(updatedSearch);
+
+      alert(`Successfully registered ${unlinkedIndices.length} new product(s) into inventory!`);
+    } catch (err: any) {
+      console.error('Failed to register all items:', err);
+      alert(err.message || 'Failed to add items to inventory.');
+    } finally {
+      setIsRegisteringItems(false);
     }
   };
 
@@ -505,31 +729,123 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
       return;
     }
 
-    if (!supplierId) return alert('Please choose a supplier.');
-    if (items.some(i => !i.InventoryId)) return alert('Please choose a material/stock item for each row.');
-
-    // frontend sanitization to avoid NaN
-    const payloadItems = items.map(i => ({
-      InventoryId: parseInt(i.InventoryId),
-      ItemType: i.ItemType || 'Inventory',
-      Quantity: parseFloat(String(i.Quantity)) || 0,
-      UnitPrice: parseFloat(String(i.UnitPrice)) || 0,
-      GSTPercentage: parseFloat(String(i.GSTPercentage)) || 0,
-      DiscountPercentage: parseFloat(String(i.DiscountPercentage)) || 0,
-      WeightPerUnit: parseFloat(String(i.WeightPerUnit)) || 1.0
-    }));
-
-    const payloadExpenses = expenses.map(e => ({
-      ExpenseName: e.ExpenseName || 'Overhead Charge',
-      Amount: parseFloat(String(e.Amount)) || 0,
-      AllocationMethod: e.AllocationMethod || 'Equal',
-      TargetInventoryId: e.TargetInventoryId ? parseInt(e.TargetInventoryId) : null
-    }));
-
     try {
       setIsSubmitting(true);
+
+      // 1. Auto-resolve or create supplier if user typed a vendor name or scanned one
+      let activeSupplierId = supplierId;
+      if (!activeSupplierId && (quickSupplierName.trim() || supplierSearchQuery.trim())) {
+        const candidateName = (quickSupplierName.trim() || supplierSearchQuery.trim());
+        const existing = suppliers.find(s => (s.CompanyName || '').toLowerCase() === candidateName.toLowerCase());
+        if (existing) {
+          activeSupplierId = String(existing.Id);
+          setSupplierId(activeSupplierId);
+        } else {
+          try {
+            const newSup = await stakeholderService.createSupplier(farmId, {
+              CompanyName: candidateName,
+              ContactPerson: quickSupplierContact || 'Direct Head',
+              Phone: quickSupplierPhone || 'N/A',
+              Email: 'info@poultrysupplier.com',
+              OpeningCreditBalance: 0,
+              Address: 'N/A'
+            });
+            if (newSup) {
+              activeSupplierId = String(newSup.Id);
+              setSupplierId(activeSupplierId);
+              const freshSuppliers = await stakeholderService.getSuppliers(farmId);
+              setSuppliers(freshSuppliers);
+            }
+          } catch (supErr) {
+            console.error('Auto-creating supplier in handleSubmit failed:', supErr);
+          }
+        }
+      }
+
+      if (!activeSupplierId) {
+        setIsSubmitting(false);
+        return alert('Please choose or enter a supplier.');
+      }
+
+      // 2. Auto-register any unlinked new items into Inventories database
+      let currentItems = [...items];
+      const unlinkedRows = currentItems
+        .map((item, idx) => ({ item, idx, name: (item.suggestedName || rowSearchQueries[idx] || '').trim() }))
+        .filter(entry => !entry.item.InventoryId && entry.name.length > 0);
+
+      if (unlinkedRows.length > 0) {
+        let createdAny = false;
+        for (const { item, idx, name } of unlinkedRows) {
+          // Check if it already exists in inventories by name
+          const existingInv = inventories.find(iv => iv.ItemName.toLowerCase() === name.toLowerCase());
+          if (existingInv) {
+            currentItems[idx] = {
+              ...currentItems[idx],
+              InventoryId: String(existingInv.Id),
+              isNewItem: false
+            };
+          } else {
+            const detected = detectCategoryAndUnit(name, item.suggestedUnit);
+            const category = item.suggestedCategory || detected.category;
+            const unit = item.suggestedUnit || detected.unit;
+            const price = parseFloat(String(item.UnitPrice)) || 0;
+            const weight = parseFloat(String(item.WeightPerUnit)) || 1.0;
+
+            const newInv = await inventoryService.createInventory(farmId, {
+              ItemName: name,
+              Category: category as any,
+              UnitOfMeasurement: unit,
+              UnitPrice: price,
+              SellingPrice: price > 0 ? price * 1.2 : 0,
+              CurrentStock: 0,
+              WeightPerUnit: weight,
+              MinThreshold: 10,
+              Notes: 'Auto-registered on bill submission'
+            });
+
+            if (newInv) {
+              createdAny = true;
+              currentItems[idx] = {
+                ...currentItems[idx],
+                InventoryId: String(newInv.Id),
+                isNewItem: false
+              };
+            }
+          }
+        }
+
+        if (createdAny) {
+          const freshInvs = await inventoryService.getInventories(farmId);
+          setInventories(freshInvs);
+        }
+        setItems(currentItems);
+      }
+
+      if (currentItems.some(i => !i.InventoryId)) {
+        setIsSubmitting(false);
+        return alert('Please choose or enter a material/stock item for each row.');
+      }
+
+      // 3. Prepare payload items with valid InventoryIds
+      const payloadItems = currentItems.map(i => ({
+        InventoryId: parseInt(i.InventoryId),
+        ItemType: i.ItemType || 'Inventory',
+        Quantity: parseFloat(String(i.Quantity)) || 0,
+        UnitPrice: parseFloat(String(i.UnitPrice)) || 0,
+        GSTPercentage: parseFloat(String(i.GSTPercentage)) || 0,
+        DiscountPercentage: parseFloat(String(i.DiscountPercentage)) || 0,
+        WeightPerUnit: parseFloat(String(i.WeightPerUnit)) || 1.0
+      }));
+
+      const payloadExpenses = expenses.map(e => ({
+        ExpenseName: e.ExpenseName || 'Overhead Charge',
+        Amount: parseFloat(String(e.Amount)) || 0,
+        AllocationMethod: e.AllocationMethod || 'Equal',
+        TargetInventoryId: e.TargetInventoryId ? parseInt(e.TargetInventoryId) : null
+      }));
+
       const purchasePayload = {
-        SupplierId: supplierId ? parseInt(supplierId) : null,
+        SupplierId: activeSupplierId ? parseInt(activeSupplierId) : null,
         PurchaseDate: purchaseDate,
         InvoiceNumber: invoiceNumber,
         ReceivedAmount: parseFloat(String(receivedAmount)) || 0,
@@ -556,7 +872,7 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
       setPaymentMode('credit');
       setRowSearchQueries({});
       fetchData();
-      alert(editPurchaseId ? 'Purchase transaction updated successfully!' : 'Purchase saved successfully!');
+      alert(editPurchaseId ? 'Purchase transaction updated successfully!' : 'Purchase saved successfully! Stock quantities have been updated.');
     } catch (err: any) {
       console.error(err);
       alert(err.message || 'An error occurred while saving the purchase.');
@@ -1197,6 +1513,145 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
 
               </div>
 
+              {/* SECTION: NEW PRODUCTS CONFIRMATION PANEL (When unlinked/new items exist) */}
+              {(() => {
+                const unlinkedItemsWithNames = items
+                  .map((item, idx) => ({ item, idx, name: (item.suggestedName || rowSearchQueries[idx] || '').trim() }))
+                  .filter(entry => !entry.item.InventoryId && entry.name.length > 0);
+
+                if (unlinkedItemsWithNames.length === 0) return null;
+
+                return (
+                  <div className="bg-amber-50/80 border-2 border-amber-300 rounded-2xl p-4 shadow-sm space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 bg-amber-500 text-white rounded-xl shadow-xs">
+                          <PackagePlus className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-bold text-amber-950 flex items-center gap-2">
+                            New Products Detected in Bill
+                            <span className="px-2 py-0.5 text-[11px] font-extrabold bg-amber-200 text-amber-900 rounded-full font-mono">
+                              {unlinkedItemsWithNames.length} to confirm
+                            </span>
+                          </h4>
+                          <p className="text-[11px] text-amber-800">
+                            These items are not yet in your inventory database. Review category and unit below, then click to add them to stock.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isRegisteringItems}
+                        onClick={handleRegisterAllNewItems}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        {isRegisteringItems ? 'Adding to Inventory...' : `Confirm & Add All (${unlinkedItemsWithNames.length}) to Stock`}
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                      {unlinkedItemsWithNames.map(({ item, idx, name }) => {
+                        const detected = detectCategoryAndUnit(name, item.suggestedUnit);
+                        const currentCategory = item.suggestedCategory || detected.category;
+                        const currentUnit = item.suggestedUnit || detected.unit;
+                        const rate = parseFloat(String(item.UnitPrice)) || 0;
+                        const qty = parseFloat(String(item.Quantity)) || 0;
+
+                        return (
+                          <div key={idx} className="bg-white border border-amber-200 rounded-xl p-3 shadow-xs flex flex-col justify-between gap-2.5">
+                            <div className="space-y-1.5">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1">
+                                  <label className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Item Name</label>
+                                  <input
+                                    type="text"
+                                    className="w-full px-2 py-1 text-xs font-bold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:border-amber-500"
+                                    value={name}
+                                    onChange={e => {
+                                      const newName = e.target.value;
+                                      const copy = [...items];
+                                      copy[idx] = { ...copy[idx], suggestedName: newName };
+                                      setItems(copy);
+                                      setRowSearchQueries(prev => ({ ...prev, [idx]: newName }));
+                                    }}
+                                  />
+                                </div>
+                                <span className="text-[10px] font-mono px-2 py-0.5 bg-amber-100 text-amber-800 rounded-md font-bold mt-4">
+                                  Row #{idx + 1}
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Category</label>
+                                  <select
+                                    className="w-full px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-medium"
+                                    value={currentCategory}
+                                    onChange={e => {
+                                      const cat = e.target.value as any;
+                                      const copy = [...items];
+                                      copy[idx] = { ...copy[idx], suggestedCategory: cat };
+                                      setItems(copy);
+                                    }}
+                                  >
+                                    <option value="Feed">Feed</option>
+                                    <option value="Medicine">Medicine / Vaccine</option>
+                                    <option value="Equipment">Equipment</option>
+                                    <option value="Raw Ingredient">Raw Ingredient</option>
+                                    <option value="Sales Item">Sales Item</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Unit</label>
+                                  <select
+                                    className="w-full px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-medium"
+                                    value={currentUnit}
+                                    onChange={e => {
+                                      const u = e.target.value;
+                                      const copy = [...items];
+                                      copy[idx] = { ...copy[idx], suggestedUnit: u };
+                                      setItems(copy);
+                                    }}
+                                  >
+                                    <option value="Kg">Kg</option>
+                                    <option value="Bag">Bag (Bora)</option>
+                                    <option value="Litre">Litre</option>
+                                    <option value="Bottle">Bottle (Btl)</option>
+                                    <option value="Box">Box / Pkt</option>
+                                    <option value="Dozen">Dozen</option>
+                                    <option value="Pcs">Pcs / Nos</option>
+                                    <option value="Gram">Gram</option>
+                                  </select>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between text-[11px] text-slate-650 bg-slate-50 px-2 py-1 rounded-md font-mono">
+                                <span>Bill Rate: <strong>₹{rate}</strong></span>
+                                <span>Qty: <strong>{qty} {currentUnit}</strong></span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 pt-1">
+                              <button
+                                type="button"
+                                disabled={isRegisteringItems}
+                                onClick={() => handleRegisterSingleItem(idx)}
+                                className="flex-1 py-1.5 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                              >
+                                <Plus className="h-3 w-3" />
+                                + Add to Stock
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* SECTION B: POS SPREADSHEET TABLE (Compact Rows) */}
               <div className="space-y-2">
                 <div className="flex justify-between items-center bg-slate-100/60 p-2 px-3 rounded-lg border border-slate-200/50">
@@ -1453,6 +1908,28 @@ export default function Purchasing({ currentLanguage = 'en' }: { currentLanguage
                                   </div>
                                 )}
                               </div>
+
+                              {/* Inline status badge & action */}
+                              {!item.InventoryId && (item.suggestedName || rowSearchQueries[idx]) ? (
+                                <div className="mt-1 flex items-center justify-between gap-1 text-[10px]">
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 font-semibold border border-amber-200">
+                                    <PackagePlus className="h-3 w-3 text-amber-600" /> New Product (Auto-creates)
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={isRegisteringItems}
+                                    onClick={() => handleRegisterSingleItem(idx)}
+                                    className="text-indigo-600 hover:text-indigo-800 font-bold hover:underline"
+                                  >
+                                    + Add Now
+                                  </button>
+                                </div>
+                              ) : item.InventoryId && invObj ? (
+                                <div className="mt-1 flex items-center gap-1 text-[10px] text-emerald-700 font-medium font-mono">
+                                  <CheckCircle2 className="h-3 w-3 text-emerald-600 inline shrink-0" />
+                                  <span>Stock: {invObj.CurrentStock ?? 0} {invObj.UnitOfMeasurement} → {(Number(invObj.CurrentStock) || 0) + (parseFloat(String(item.Quantity)) || 0)}</span>
+                                </div>
+                              ) : null}
                             </td>
 
                             {/* Qty Cell */}
