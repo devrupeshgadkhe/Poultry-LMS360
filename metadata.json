@@ -1,0 +1,6 @@
+{
+  "name": "Poultry LMS 360",
+  "description": "Comprehensive Poultry Layer Management System designed for flock tracking, daily logs, vaccinations, feed recipes, sales, purchases, and multi-user HR payroll.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
