@@ -2,6 +2,10 @@ plugins {
     id 'com.android.application'
 }
 
+def ciRunNum = System.getenv("GITHUB_RUN_NUMBER") ? System.getenv("GITHUB_RUN_NUMBER").toInteger() : 10
+def resolvedVersionCode = project.hasProperty('APP_VERSION_CODE') ? project.property('APP_VERSION_CODE').toInteger() : (100 + ciRunNum)
+def resolvedVersionName = project.hasProperty('APP_VERSION_NAME') ? project.property('APP_VERSION_NAME').toString() : "1.0.${ciRunNum}"
+
 android {
     namespace 'com.poultrylms360.app'
     compileSdk 34
@@ -10,15 +14,19 @@ android {
         applicationId "com.poultrylms360.app"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0.0"
+        versionCode resolvedVersionCode
+        versionName resolvedVersionName
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
-        debug {
-            // Default standard debug keystore
+        release {
+            storeFile file("poultry-lms-signing.p12")
+            storePassword "poultrylms360"
+            keyAlias "poultrykey"
+            keyPassword "poultrylms360"
+            storeType "PKCS12"
         }
     }
 
@@ -26,10 +34,10 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
         debug {
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
 

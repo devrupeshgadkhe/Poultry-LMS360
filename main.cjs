@@ -35,7 +35,59 @@ process.env.NODE_ENV = process.env.NODE_ENV || 'production';
 
 let mainWindow = null;
 
-// Background auto-updater for Windows Desktop (.exe)
+const { spawn } = require('child_process');
+
+let pendingDesktopInstallerPath = null;
+let desktopUpdateApplied = false;
+
+function isNewerSemver(remoteVer, localVer) {
+  const cleanRemote = String(remoteVer || '').replace(/^v/i, '').split('-')[0];
+  const cleanLocal = String(localVer || '').replace(/^v/i, '').split('-')[0];
+  const rParts = cleanRemote.split('.').map(n => parseInt(n, 10) || 0);
+  const lParts = cleanLocal.split('.').map(n => parseInt(n, 10) || 0);
+  const len = Math.max(rParts.length, lParts.length, 3);
+  for (let i = 0; i < len; i++) {
+    const r = rParts[i] || 0;
+    const l = lParts[i] || 0;
+    if (r > l) return true;
+    if (r < l) return false;
+  }
+  return false;
+}
+
+function launchSilentInstallerAndRelaunch(installerPath, relaunchAfter) {
+  if (!installerPath || !fs.existsSync(installerPath) || desktopUpdateApplied) return;
+  desktopUpdateApplied = true;
+  try {
+    const helperBat = path.join(os.tmpdir(), 'poultry-lms-autoupdate.bat');
+    const currentExe = process.execPath;
+    const lines = [
+      '@echo off',
+      'timeout /t 2 /nobreak >nul',
+      `start /wait "" "${installerPath}" /S`,
+      relaunchAfter ? `if exist "${currentExe}" start "" "${currentExe}"` : '',
+      `del "${installerPath}" >nul 2>&1`,
+      'del "%~f0" >nul 2>&1'
+    ].filter(Boolean);
+    fs.writeFileSync(helperBat, lines.join('\r\n'), 'utf8');
+    const child = spawn('cmd.exe', ['/c', helperBat], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.unref();
+  } catch (err) {
+    console.error('[AutoUpdate] Failed to schedule silent installer:', err);
+  }
+}
+
+app.on('before-quit', () => {
+  if (pendingDesktopInstallerPath && fs.existsSync(pendingDesktopInstallerPath) && !desktopUpdateApplied) {
+    launchSilentInstallerAndRelaunch(pendingDesktopInstallerPath, false);
+  }
+});
+
+// Background silent auto-updater for Windows Desktop (.exe)
 function checkWindowsAutoUpdate() {
   if (!app.isPackaged) return;
 
@@ -49,6 +101,7 @@ function checkWindowsAutoUpdate() {
   };
 
   https.get(options, (res) => {
+    if (res.statusCode !== 200) return;
     let data = '';
     res.on('data', chunk => { data += chunk; });
     res.on('end', () => {
@@ -56,49 +109,72 @@ function checkWindowsAutoUpdate() {
         const release = JSON.parse(data);
         if (!release || !release.tag_name) return;
 
-        const remoteTag = release.tag_name.trim().replace(/^v/, '');
-        const localTag = currentVersion.trim().replace(/^v/, '');
+        const remoteTag = release.tag_name.trim().replace(/^v/i, '');
+        const localTag = currentVersion.trim().replace(/^v/i, '');
 
-        if (remoteTag !== localTag && release.assets && Array.isArray(release.assets)) {
+        if (isNewerSemver(remoteTag, localTag) && release.assets && Array.isArray(release.assets)) {
           const exeAsset = release.assets.find(a => a.name && a.name.toLowerCase().endsWith('.exe'));
           if (exeAsset && exeAsset.browser_download_url) {
-            console.log(`[AutoUpdate] Found new desktop version: ${release.tag_name}. Starting background download...`);
+            console.log(`[AutoUpdate] Found newer desktop version v${remoteTag}. Silently downloading in background...`);
 
-            dialog.showMessageBox(mainWindow, {
-              type: 'info',
-              title: 'Poultry LMS 360 Update',
-              message: `New version available (${release.tag_name})!`,
-              detail: 'Poultry LMS 360 will automatically download and prepare the update.',
-              buttons: ['OK']
-            });
+            const finalExePath = path.join(os.tmpdir(), `Poultry-LMS-360-Setup-${remoteTag}.exe`);
+            const partialExePath = `${finalExePath}.part`;
 
-            const tempExePath = path.join(os.tmpdir(), `Poultry-LMS-360-Setup-${release.tag_name}.exe`);
-            const fileStream = fs.createWriteStream(tempExePath);
+            // Clean up stale partial download
+            try { if (fs.existsSync(partialExePath)) fs.unlinkSync(partialExePath); } catch {}
 
-            const downloadReq = (url) => {
+            const downloadReq = (url, redirects = 0) => {
+              if (redirects > 5) return;
               https.get(url, { headers: { 'User-Agent': 'PoultryLMS360-Desktop-Updater' } }, (dlRes) => {
-                if (dlRes.statusCode === 302 || dlRes.statusCode === 301) {
-                  return downloadReq(dlRes.headers.location);
+                if (dlRes.statusCode >= 300 && dlRes.statusCode < 400 && dlRes.headers.location) {
+                  dlRes.resume();
+                  return downloadReq(dlRes.headers.location, redirects + 1);
                 }
-                dlRes.pipe(fileStream);
-                fileStream.on('finish', () => {
-                  fileStream.close();
-                  console.log('[AutoUpdate] Installer download completed:', tempExePath);
+                if (dlRes.statusCode !== 200) {
+                  dlRes.resume();
+                  return;
+                }
 
-                  dialog.showMessageBox(mainWindow, {
-                    type: 'question',
-                    title: 'Update Ready to Install',
-                    message: 'The new update has been downloaded. Would you like to install and restart now?',
-                    buttons: ['Install & Restart Now', 'Later'],
-                    defaultId: 0
-                  }).then(({ response }) => {
-                    if (response === 0) {
-                      exec(`"${tempExePath}"`, (err) => {
-                        if (err) console.error('[AutoUpdate] Failed to run installer:', err);
-                      });
-                      app.quit();
+                const fileStream = fs.createWriteStream(partialExePath);
+                dlRes.pipe(fileStream);
+
+                fileStream.on('finish', () => {
+                  fileStream.close(() => {
+                    try {
+                      const stats = fs.statSync(partialExePath);
+                      // Verify valid installer (> 10MB)
+                      if (stats.size > 10 * 1024 * 1024) {
+                        if (fs.existsSync(finalExePath)) fs.unlinkSync(finalExePath);
+                        fs.renameSync(partialExePath, finalExePath);
+                        pendingDesktopInstallerPath = finalExePath;
+                        console.log('[AutoUpdate] Installer verified and staged:', finalExePath);
+
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                          dialog.showMessageBox(mainWindow, {
+                            type: 'info',
+                            title: 'Update Ready',
+                            message: `Poultry LMS 360 v${remoteTag} is downloaded and ready.`,
+                            detail: 'Click "Restart & Update" to apply automatically, or continue working (it will auto-install when you close the app).',
+                            buttons: ['Restart & Update Now', 'Install on Exit'],
+                            defaultId: 0
+                          }).then(({ response }) => {
+                            if (response === 0) {
+                              launchSilentInstallerAndRelaunch(finalExePath, true);
+                              app.quit();
+                            }
+                          });
+                        }
+                      } else {
+                        fs.unlinkSync(partialExePath);
+                      }
+                    } catch (verifyErr) {
+                      console.warn('[AutoUpdate] Verification error:', verifyErr);
                     }
                   });
+                });
+
+                fileStream.on('error', () => {
+                  try { fs.unlinkSync(partialExePath); } catch {}
                 });
               }).on('error', (err) => {
                 console.warn('[AutoUpdate] Download error:', err);
@@ -168,6 +244,16 @@ function createMainWindow() {
       scheduleRetry();
     });
   };
+
+  // Inject native desktop version so renderer does not show duplicate web update prompts
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const appVer = JSON.stringify(app.getVersion());
+      mainWindow.webContents.executeJavaScript(
+        `window.poultryDesktopVersion = ${appVer}; window.poultryDesktopHandledUpdate = true;`
+      ).catch(() => {});
+    }
+  });
 
   // Auto-recovery if initial render receives a temporary network connection error
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {

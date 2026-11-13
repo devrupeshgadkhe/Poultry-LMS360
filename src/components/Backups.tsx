@@ -16,13 +16,6 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
   // Local database backups history
   const [localBackups, setLocalBackups] = useState<any[]>([]);
 
-  // Cloud Backup custom states
-  const [showGitConfig, setShowGitConfig] = useState(false);
-  const [gitPat, setGitPat] = useState('');
-  const [gitRepo, setGitRepo] = useState('');
-  const [gitBranch, setGitBranch] = useState('main');
-  const [gitFolder, setGitFolder] = useState('backups');
-
   // Staged / Loaded file backup state for manual restoration step
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [stagedBackupData, setStagedBackupData] = useState<any | null>(null);
@@ -43,9 +36,6 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
       if (statusRes.ok) {
         const statusData = await statusRes.json();
         setCloudStatus(statusData);
-        if (statusData.repo) setGitRepo(statusData.repo);
-        if (statusData.branch) setGitBranch(statusData.branch);
-        if (statusData.folderPath) setGitFolder(statusData.folderPath);
       }
 
       const localRes = await fetch('/api/backups/local');
@@ -236,54 +226,6 @@ export default function Backups({ currentLanguage = 'en' }: { currentLanguage?: 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Cloud synchronization failed.');
       setSuccessMsg('Success: High security system database backup successfully synchronized to the secure cloud repository.');
-      fetchStatusAndBackups();
-    } catch (err: any) {
-      setErrMsg(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSaveGitHubConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setSuccessMsg(null);
-    setErrMsg(null);
-    try {
-      const res = await fetch('/api/backups/github/configure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pat: gitPat,
-          repo: gitRepo,
-          branch: gitBranch,
-          folderPath: gitFolder
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to save configuration.');
-      setSuccessMsg('Automated Cloud Backup connection successfully configured and verified!');
-      setShowGitConfig(false);
-      fetchStatusAndBackups();
-    } catch (err: any) {
-      setErrMsg(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDisconnectGitHub = async () => {
-    if (!window.confirm('Are you sure you want to disconnect and clear the Cloud Backup configuration?')) return;
-    setLoading(true);
-    setSuccessMsg(null);
-    setErrMsg(null);
-    try {
-      const res = await fetch('/api/backups/gdrive/disconnect', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to disconnect.');
-      setSuccessMsg('Cloud Backup connection successfully unlinked and deactivated.');
-      setGitPat('');
-      setGitRepo('');
       fetchStatusAndBackups();
     } catch (err: any) {
       setErrMsg(err.message);

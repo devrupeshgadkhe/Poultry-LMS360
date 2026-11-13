@@ -29,10 +29,16 @@ jobs:
       - name: Install Dependencies
         run: npm install --include=optional
 
+      - name: Sync Build Version
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='1.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
+
       - name: Build App & Pack Windows Installer (.exe)
         run: npm run electron:pack
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_APP_VERSION: v1.0.${{ github.run_number }}
 
       - name: Rename & Stage Windows Setup (.exe)
         shell: bash
@@ -72,6 +78,8 @@ jobs:
 
       - name: Build Web Application
         run: npm run build
+        env:
+          VITE_APP_VERSION: v1.0.${{ github.run_number }}
 
       - name: Bundle Web Assets into Android App
         run: |
@@ -82,12 +90,13 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleRelease -PAPP_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER)) -PAPP_VERSION_NAME=1.0.${GITHUB_RUN_NUMBER} --stacktrace
 
       - name: Stage APK Output
         run: |
           mkdir -p release-assets/android
-          find android/app/build/outputs/apk -name "*.apk" -exec cp {} release-assets/android/Poultry-LMS-360.apk \;
+          find android/app/build/outputs/apk/release -name "*.apk" -exec cp {} release-assets/android/Poultry-LMS-360.apk \;
+          test -s release-assets/android/Poultry-LMS-360.apk
           echo "Staged Android APK:"
           ls -la release-assets/android/
 
@@ -140,7 +149,7 @@ jobs:
 
             - 💻 **Windows Desktop:** `Poultry-LMS-360-Setup.exe` (with automatic background updates & custom icon)
             - 📱 **Android Mobile:** `Poultry-LMS-360.apk` (with in-app update button & device permissions prompt)
-            - ☁️ **Cloud Database:** Real-time synchronization with Supabase Cloud
+            - ☁️ **Cloud Sync:** Real-time cloud synchronization across devices
           draft: false
           prerelease: false
           overwrite_files: true
