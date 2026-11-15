@@ -106,6 +106,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
   const [aiSummary, setAiSummary] = useState<string>('');
   const [aiJsonRecords, setAiJsonRecords] = useState<any[] | null>(null);
   const [showJsonPreview, setShowJsonPreview] = useState<boolean>(false);
+  const [autoDetectType, setAutoDetectType] = useState<boolean>(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const aiFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -131,6 +132,8 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
         },
         body: JSON.stringify({
           type: selectedType,
+          fileName: file.name,
+          autoDetectType,
           fileBase64: base64,
           farmId
         })
@@ -141,9 +144,14 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
         throw new Error(data.error || 'Failed to transform Excel workbook into schema JSON.');
       }
 
-      setAiSummary(data.summary || `Successfully transformed ${data.jsonRecords?.length || 0} records into ${selectedType} JSON schema.`);
+      const effectiveType = (data.type || selectedType) as ImportType;
+      if (effectiveType !== selectedType) {
+        setSelectedType(effectiveType);
+      }
+
+      setAiSummary(data.summary || `Successfully transformed ${data.jsonRecords?.length || 0} records into ${effectiveType} JSON schema.`);
       setAiJsonRecords(Array.isArray(data.jsonRecords) ? data.jsonRecords : null);
-      await processFileContent(data.csvContent, file.name, true);
+      await processFileContent(data.csvContent, file.name, true, effectiveType);
     } catch (err: any) {
       setErrorMessage(err.message || 'Excel-to-JSON conversion failed.');
     } finally {
@@ -218,7 +226,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
     }
   };
 
-  const processFileContent = async (content: string, name: string, preserveAiState = false) => {
+  const processFileContent = async (content: string, name: string, preserveAiState = false, overrideType?: ImportType) => {
     setCsvText(content);
     setFileName(name);
     setSuccessMessage('');
@@ -229,7 +237,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
       setAiSummary('');
       setShowJsonPreview(false);
     }
-    await handleParse(content);
+    await handleParse(content, overrideType);
   };
 
   const handleUploadedFile = async (file: File) => {
@@ -269,9 +277,10 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
     }
   };
 
-  const handleParse = async (rawCsv: string) => {
+  const handleParse = async (rawCsv: string, overrideType?: ImportType) => {
     setIsParsing(true);
     setErrorMessage('');
+    const targetType = overrideType || selectedType;
     try {
       const token = localStorage.getItem('token');
       const response = await fetch('/api/bulk-import/parse', {
@@ -283,7 +292,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
           'X-Farm-Id': String(farmId)
         },
         body: JSON.stringify({
-          type: selectedType,
+          type: targetType,
           csvData: rawCsv,
           farmId
         })
@@ -506,6 +515,16 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
                 }
               }}
             />
+
+            <label className="flex items-center gap-2 text-[11px] text-slate-200 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoDetectType}
+                onChange={(e) => setAutoDetectType(e.target.checked)}
+                className="rounded border-indigo-400 text-teal-500 focus:ring-teal-500"
+              />
+              <span>Auto-detect ledger type (Sales / Purchases / Items / Logs) from Excel</span>
+            </label>
 
             <button
               onClick={() => aiFileInputRef.current?.click()}

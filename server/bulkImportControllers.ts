@@ -505,6 +505,11 @@ const SALES_HEADER_MAP: Record<string, string> = {
   received: 'ReceivedAmount',
   paidamount: 'ReceivedAmount',
   paid: 'ReceivedAmount',
+  totalamount: 'TotalAmount',
+  amount: 'TotalAmount',
+  netamount: 'TotalAmount',
+  grandtotal: 'TotalAmount',
+  lineamount: 'TotalAmount',
   status: 'Status',
   paymentstatus: 'Status'
 };
@@ -545,6 +550,10 @@ const PURCHASES_HEADER_MAP: Record<string, string> = {
   receivedamount: 'ReceivedAmount',
   paidamount: 'ReceivedAmount',
   paid: 'ReceivedAmount',
+  totalamount: 'TotalAmount',
+  amount: 'TotalAmount',
+  netamount: 'TotalAmount',
+  grandtotal: 'TotalAmount',
   status: 'Status'
 };
 
@@ -619,6 +628,148 @@ export function isEggItemName(itemName: string, itemType?: string): boolean {
     /\b(fresh|collected|table|white|brown|layer|culled|damaged|broken|cracked|waste|jumbo|small|medium|large|pullet)\s+eggs?\b/i.test(norm) ||
     /\beggs?\b/i.test(norm)
   );
+}
+
+export const ALLOWED_ITEM_CATEGORIES = ['Feed', 'Medicine', 'Equipment', 'Sales Item', 'Raw Ingredient'] as const;
+
+export function inferItemCategory(
+  itemName: string,
+  rawCategory?: string,
+  unitPrice?: number,
+  sellingPrice?: number,
+  notes?: string
+): { category: string; inferred: boolean } {
+  const cleanedRaw = (rawCategory || '').trim();
+  const exactMatch = ALLOWED_ITEM_CATEGORIES.find(c => c.toLowerCase() === cleanedRaw.toLowerCase());
+  if (exactMatch) {
+    return { category: exactMatch, inferred: false };
+  }
+
+  const combined = `${cleanedRaw} ${itemName || ''} ${notes || ''}`.toLowerCase();
+
+  if (/\b(medicine|med|vaccine|vaccination|vitamin|antibiotic|probiotic|tonic|syrup|tablet|capsule|powder|electrolyte|dewormer|disinfectant|sanitizer|drug|supplement|toxin\s*binder|liver)\b/i.test(combined)) {
+    return { category: 'Medicine', inferred: true };
+  }
+  if (/\b(equipment|feeder|drinker|nipple|cage|crate|heater|brooder|bulb|fan|curtain|weighing|scale|washer|sprayer|incubator|nesting|machine|tool|tray\s*washer)\b/i.test(combined)) {
+    return { category: 'Equipment', inferred: true };
+  }
+  if (/\b(raw\s*ingredient|maize|corn|soya|soybean|doc|wheat\s*bran|rice\s*bran|dorB|mustard\s*cake|groundnut|limestone|lsp|grit|shell\s*grit|salt|dcp|mcp|choline|lysine|methionine|premix|oil|molasses|bajra|jowar)\b/i.test(combined)) {
+    return { category: 'Raw Ingredient', inferred: true };
+  }
+  if (/\b(feed|mash|crumble|pellet|prestarter|pre-starter|starter|grower|finisher|layer\s*feed|broiler\s*feed|concentrate|ration)\b/i.test(combined)) {
+    return { category: 'Feed', inferred: true };
+  }
+  if (/\b(egg|eggs|bird|birds|hen|hens|broiler|layer|cull|pullet|chick|chicken|meat|manure|litter|sales?\s*item|finished|product|goods|retail)\b/i.test(combined)) {
+    return { category: 'Sales Item', inferred: true };
+  }
+
+  // Price-based heuristic fallback
+  if ((sellingPrice || 0) > 0 && !(unitPrice || 0)) {
+    return { category: 'Sales Item', inferred: true };
+  }
+  if ((unitPrice || 0) > 0 && !(sellingPrice || 0)) {
+    return { category: 'Feed', inferred: true };
+  }
+  return { category: 'Sales Item', inferred: true };
+}
+
+export function inferUnitOfMeasurement(
+  itemName: string,
+  rawUom?: string,
+  category?: string,
+  notes?: string
+): { uom: string; inferred: boolean } {
+  const trimmed = (rawUom || '').trim();
+  if (trimmed) {
+    return { uom: trimmed, inferred: false };
+  }
+
+  const combined = `${itemName || ''} ${notes || ''}`.toLowerCase();
+  if (/\b(tray|trays|30\s*pcs|30pcs)\b/i.test(combined)) return { uom: 'Tray-30', inferred: true };
+  if (/\b(dozen|doz|12\s*pcs)\b/i.test(combined)) return { uom: 'Dozen', inferred: true };
+  if (/\b(bottle|btl|syrup|liquid|ltr|litre|liter|ml|vaccine|drops?)\b/i.test(combined)) return { uom: 'Bottle', inferred: true };
+  if (/\b(bag|bags|sack|50\s*kg|25\s*kg)\b/i.test(combined)) return { uom: 'Bag', inferred: true };
+  if (category === 'Feed' || category === 'Raw Ingredient' || /\b(kg|kilogram|gram|gm|quintal|ton|mt|feed|mash|maize|corn|soya|grit)\b/i.test(combined)) {
+    return { uom: 'Kg', inferred: true };
+  }
+  return { uom: 'Pieces', inferred: true };
+}
+
+export type BulkImportType = 'sales' | 'purchases' | 'items' | 'daily-logs';
+
+export function detectWorkbookLedgerType(
+  fileName: string,
+  sheetsContent: Array<{ name: string; rows: any[][] }>,
+  requestedType: BulkImportType
+): { detectedType: BulkImportType; confidence: number; reason: string } {
+  const sampleText = [
+    fileName || '',
+    ...sheetsContent.map(s => `${s.name} ${s.rows.slice(0, 20).flat().join(' ')}`)
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  const scores: Record<BulkImportType, number> = {
+    sales: 0,
+    purchases: 0,
+    'daily-logs': 0,
+    items: 0
+  };
+
+  // Filename signals
+  if (/\b(sale|sales|invoice|billing|receipt|dispatch)\b/i.test(fileName || '')) scores.sales += 6;
+  if (/\b(purchase|purchases|procurement|vendor|supplier|grn|inward)\b/i.test(fileName || '')) scores.purchases += 6;
+  if (/\b(daily|log|logs|production|mortality|flock\s*report|egg\s*collection)\b/i.test(fileName || '')) scores['daily-logs'] += 6;
+  if (/\b(item\s*master|inventory\s*list|catalog|stock\s*list|products?)\b/i.test(fileName || '')) scores.items += 6;
+
+  // Sheet names & header/body vocabulary signals
+  const headerTokens = sheetsContent
+    .flatMap(s => [s.name, ...s.rows.slice(0, 12).flat()])
+    .map(v => String(v || '').toLowerCase());
+
+  for (const tok of headerTokens) {
+    if (/\b(sale\s*date|customer|party\s*name|buyer|client|bill\s*to|sold\s*to|received\s*amount|sale\s*report|invoice\s*no|inv\s*no|bill\s*no|voucher\s*no|particulars|credit\s*sale|cash\s*sale|receipt\s*no)\b/i.test(tok)) {
+      scores.sales += 3;
+    }
+    if (/\b(sale|sales|sold|retail\s*sale)\b/i.test(tok)) {
+      scores.sales += 2;
+    }
+    if (/\b(purchase\s*date|supplier|vendor|grn|po\s*no|purchased\s*from|bill\s*from|procurement|landing)\b/i.test(tok)) {
+      scores.purchases += 3;
+    }
+    if (/\b(flock|shed|house|batch|mortality|eggs\s*collected|damaged\s*eggs|feed\s*consumed|water\s*consumed|daily\s*log|avg\s*weight)\b/i.test(tok)) {
+      scores['daily-logs'] += 3;
+    }
+    if (/\b(unit\s*of\s*measurement|uom|min\s*threshold|weight\s*per\s*unit|opening\s*stock|current\s*stock|reorder|category)\b/i.test(tok)) {
+      scores.items += 3;
+    }
+  }
+
+  // Date presence strongly suggests transactional/daily-log rather than static Item Master
+  const hasDatePattern = /\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}\b|\b\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}\b/.test(sampleText);
+  if (hasDatePattern) {
+    scores.sales += 1;
+    scores.purchases += 1;
+    scores['daily-logs'] += 1;
+  }
+
+  const ranked = (Object.entries(scores) as Array<[BulkImportType, number]>).sort((a, b) => b[1] - a[1]);
+  const [bestType, bestScore] = ranked[0];
+  const [, secondScore] = ranked[1];
+
+  if (bestScore >= 4 && bestScore > secondScore && bestType !== requestedType) {
+    return {
+      detectedType: bestType,
+      confidence: bestScore,
+      reason: `Detected ${bestType.toUpperCase()} workbook structure from sheet headers/filename (score ${bestScore} vs ${requestedType} ${scores[requestedType]}).`
+    };
+  }
+
+  return {
+    detectedType: requestedType,
+    confidence: scores[requestedType],
+    reason: `Using selected ledger type ${requestedType.toUpperCase()}.`
+  };
 }
 
 function csvEscapeCell(val: any): string {
@@ -749,6 +900,10 @@ export const bulkImportControllers = {
 
       let hasNonZeroEggs = false;
       let hasNonZeroMortality = false;
+      const seenItemNamesInFile = new Set<string>();
+      let lastSeenSaleDate = '';
+      let lastSeenPurchaseDate = '';
+      let lastSeenLogDate = '';
 
       for (let index = 0; index < dataRows.length; index++) {
         const rawRow = dataRows[index];
@@ -770,42 +925,73 @@ export const bulkImportControllers = {
 
         if (type === 'items') {
           // Fields: ItemName, Category, UnitOfMeasurement, UnitPrice, SellingPrice, CurrentStock, WeightPerUnit, MinThreshold, Notes
-          const itemName = record.ItemName || '';
-          const category = record.Category || '';
-          const uom = record.UnitOfMeasurement || '';
+          const itemName = (record.ItemName || '').trim();
+          record.ItemName = itemName;
+
+          const unitPrice = cleanFloat(record.UnitPrice || 0);
+          const sellingPrice = cleanFloat(record.SellingPrice || 0);
+          const currentStock = cleanFloat(record.CurrentStock || 0);
+          const weightPerUnit = cleanFloat(record.WeightPerUnit || 1) || 1;
+          const minThreshold = cleanFloat(record.MinThreshold || 0);
+
+          record.UnitPrice = String(unitPrice);
+          record.SellingPrice = String(sellingPrice);
+          record.CurrentStock = String(currentStock);
+          record.WeightPerUnit = String(weightPerUnit);
+          record.MinThreshold = String(minThreshold);
+          record.Notes = (record.Notes || '').trim();
+
+          const catResult = inferItemCategory(itemName, record.Category, unitPrice, sellingPrice, record.Notes);
+          const category = catResult.category;
+          record.Category = category;
+
+          const uomResult = inferUnitOfMeasurement(itemName, record.UnitOfMeasurement, category, record.Notes);
+          const uom = uomResult.uom;
+          record.UnitOfMeasurement = uom;
 
           if (!itemName) {
             errors.push('Missing unique ItemName');
             status = 'Invalid';
           }
-          if (!category) {
-            errors.push('Missing Category');
-            status = 'Invalid';
-          } else {
-            const allowedCats = ['Feed', 'Medicine', 'Equipment', 'Sales Item', 'Raw Ingredient'];
-            if (!allowedCats.includes(category)) {
-              errors.push(`Invalid Category. Choose from: ${allowedCats.join(', ')}`);
-              status = 'Invalid';
-            }
+
+          if (catResult.inferred && itemName) {
+            details.push(`Auto-inferred Category: "${category}"`);
           }
-          if (!uom) {
-            errors.push('Missing UnitOfMeasurement');
-            status = 'Invalid';
+          if (uomResult.inferred && itemName) {
+            details.push(`Auto-inferred Unit: "${uom}"`);
           }
 
-          if (itemName && existingInvs.has(itemName.toLowerCase().trim())) {
+          const itemKey = itemName.toLowerCase().trim();
+          if (itemKey && (existingInvs.has(itemKey) || seenItemNamesInFile.has(itemKey))) {
             status = 'Duplicate';
-            details.push(`Item "${itemName}" already exists. It will be skipped.`);
-          } else if (status === 'Valid') {
-            details.push(`New item to be registered: "${itemName}" (${category})`);
+            details.push(
+              existingInvs.has(itemKey)
+                ? `Item "${itemName}" already exists in DB. It will be skipped.`
+                : `Item "${itemName}" appears earlier in this file. Duplicate row skipped.`
+            );
+          } else if (status === 'Valid' && itemName) {
+            seenItemNamesInFile.add(itemKey);
+            details.push(`New item to be registered: "${itemName}" (${category} • ${uom})`);
           }
 
         } else if (type === 'daily-logs') {
           // Fields: FlockName, LogDate, FeedName, FeedConsumedKg, MortalityCount, EggsCollected, DamagedEggsCollected, WaterConsumed, DailyAverageWeight, BirdsEatenBySelf, BirdsEatenValue, EggsGifted, EggsGiftedValue, Notes
-          const flockName = record.FlockName || '';
+          let flockName = (record.FlockName || '').trim();
           let logDate = cleanDate(record.LogDate || '');
+          if (!logDate && lastSeenLogDate) {
+            logDate = lastSeenLogDate;
+            details.push(`Inherited LogDate ${logDate} from previous row.`);
+          } else if (logDate && /^\d{4}-\d{2}-\d{2}$/.test(logDate)) {
+            lastSeenLogDate = logDate;
+          }
           record.LogDate = logDate;
           const feedName = record.FeedName || '';
+
+          if (!flockName && flocks.length === 1) {
+            flockName = flocks[0].FlockName;
+            record.FlockName = flockName;
+            details.push(`Auto-assigned to active flock: "${flockName}"`);
+          }
 
           const eggs = cleanInt(record.EggsCollected || 0);
           const mortality = cleanInt(record.MortalityCount || 0);
@@ -880,31 +1066,60 @@ export const bulkImportControllers = {
             record._feedItemId = null;
           }
 
-
           details.push(`🥚 Eggs Collected: ${eggs.toLocaleString()} | 💀 Mortality: ${mortality} | 🌾 Feed: ${feed} kg`);
 
         } else if (type === 'purchases') {
           // Fields: InvoiceNumber, SupplierName, PurchaseDate, ItemName, ItemType, Quantity, UnitPrice, GSTPercentage, ReceivedAmount, Status, Notes
           const invoiceNo = (record.InvoiceNumber || '').trim();
-          const supplierName = (record.SupplierName || '').trim();
-          const purchaseDate = cleanDate(record.PurchaseDate || '');
+          let supplierName = (record.SupplierName || '').trim();
+          if (!supplierName) {
+            supplierName = 'General Supplier';
+            record.SupplierName = supplierName;
+            details.push('Missing SupplierName defaulted to "General Supplier".');
+          }
+
+          let purchaseDate = cleanDate(record.PurchaseDate || '');
+          if (!purchaseDate && lastSeenPurchaseDate) {
+            purchaseDate = lastSeenPurchaseDate;
+            details.push(`Inherited PurchaseDate ${purchaseDate} from previous row.`);
+          } else if (purchaseDate && /^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) {
+            lastSeenPurchaseDate = purchaseDate;
+          }
           record.PurchaseDate = purchaseDate;
+
           const itemName = (record.ItemName || '').trim();
           const itemType = (record.ItemType || 'Inventory').trim();
 
-          const qty = cleanFloat(record.Quantity || 0);
-          const price = cleanFloat(record.UnitPrice || 0);
+          let qty = cleanFloat(record.Quantity || 0);
+          let price = cleanFloat(record.UnitPrice || 0);
+          const rawTotalAmt = cleanFloat(record.TotalAmount || 0);
+          if (qty <= 0 && (price > 0 || rawTotalAmt > 0) && itemName) {
+            qty = 1;
+            details.push('Missing Quantity defaulted to 1.');
+          }
+          if (price === 0 && rawTotalAmt > 0 && qty > 0) {
+            price = Number((rawTotalAmt / qty).toFixed(4));
+            details.push(`Computed UnitPrice (${price}) from TotalAmount / Quantity.`);
+          }
+
           const gstPerc = cleanFloat(record.GSTPercentage || 0);
-          const receivedAmt = cleanFloat(record.ReceivedAmount || 0);
+          let receivedAmt = cleanFloat(record.ReceivedAmount || 0);
+          const explicitStatus = (record.Status || '').trim().toLowerCase();
+          const estTotal = (qty * price) * (1 + gstPerc / 100);
+          if (receivedAmt === 0 && estTotal > 0 && explicitStatus !== 'unpaid' && explicitStatus !== 'credit') {
+            if (explicitStatus === 'paid' || (!explicitStatus && record.ReceivedAmount === undefined)) {
+              receivedAmt = Number(estTotal.toFixed(2));
+            }
+          }
+          if (!record.Status) {
+            record.Status = receivedAmt >= estTotal - 0.01 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
+          }
+
           record.Quantity = String(qty);
           record.UnitPrice = String(price);
           record.GSTPercentage = String(gstPerc);
           record.ReceivedAmount = String(receivedAmt);
 
-          if (!supplierName) {
-            errors.push('Missing SupplierName');
-            status = 'Invalid';
-          }
           if (!purchaseDate || !/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) {
             errors.push('Missing or invalid PurchaseDate (YYYY-MM-DD)');
             status = 'Invalid';
@@ -948,8 +1163,11 @@ export const bulkImportControllers = {
               record.ItemType = 'Inventory';
               const matchedItem = inventories.find(inv => (inv.ItemName || '').toLowerCase().trim() === itemName.toLowerCase().trim());
               if (!matchedItem) {
-                errors.push(`Inventory Item "${itemName}" not found. Create it or match exact spelling.`);
-                status = 'Invalid';
+                const inferredCat = inferItemCategory(itemName, '', price, 0, record.Notes);
+                const inferredUom = inferUnitOfMeasurement(itemName, '', inferredCat.category, record.Notes);
+                record._autoCreateCategory = inferredCat.category;
+                record._autoCreateUom = inferredUom.uom;
+                details.push(`New warehouse item "${itemName}" (${inferredCat.category}, ${inferredUom.uom}) will be auto-registered on commit.`);
               } else {
                 record._inventoryId = matchedItem.Id;
                 details.push(`Matched Item: "${itemName}" (ID: ${matchedItem.Id})`);
@@ -960,24 +1178,32 @@ export const bulkImportControllers = {
         } else if (type === 'sales') {
           // Fields: InvoiceNumber, CustomerName, SaleDate, ItemName, ItemType, Quantity, UnitPrice, GSTPercentage, Discount, OtherCharges, ReceivedAmount, Status, Notes
           const invoiceNo = (record.InvoiceNumber || '').trim();
-          const customerName = (record.CustomerName || '').trim();
-          const saleDate = cleanDate(record.SaleDate || '');
+          let customerName = (record.CustomerName || '').trim();
+          if (!customerName) {
+            customerName = 'Walk-in Customer';
+            record.CustomerName = customerName;
+            details.push('Missing CustomerName defaulted to "Walk-in Customer".');
+          }
+
+          let saleDate = cleanDate(record.SaleDate || '');
+          if (!saleDate && lastSeenSaleDate) {
+            saleDate = lastSeenSaleDate;
+            details.push(`Inherited SaleDate ${saleDate} from previous row.`);
+          } else if (saleDate && /^\d{4}-\d{2}-\d{2}$/.test(saleDate)) {
+            lastSeenSaleDate = saleDate;
+          }
           record.SaleDate = saleDate;
-          const itemName = (record.ItemName || '').trim();
 
-          const qty = cleanFloat(record.Quantity || 0);
-          const price = cleanFloat(record.UnitPrice || 0);
-          const gstPerc = cleanFloat(record.GSTPercentage || 0);
-          const discount = cleanFloat(record.Discount || 0);
-          const otherCharges = cleanFloat(record.OtherCharges || 0);
-          const receivedAmt = cleanFloat(record.ReceivedAmount || 0);
+          let itemName = (record.ItemName || '').trim();
+          let qty = cleanFloat(record.Quantity || 0);
+          let price = cleanFloat(record.UnitPrice || 0);
+          const rawTotalAmt = cleanFloat(record.TotalAmount || 0);
 
-          record.Quantity = String(qty);
-          record.UnitPrice = String(price);
-          record.GSTPercentage = String(gstPerc);
-          record.Discount = String(discount);
-          record.OtherCharges = String(otherCharges);
-          record.ReceivedAmount = String(receivedAmt);
+          if (!itemName && (qty > 0 || rawTotalAmt > 0 || price > 0)) {
+            itemName = 'Fresh Eggs';
+            record.ItemName = itemName;
+            details.push('Missing ItemName defaulted to "Fresh Eggs".');
+          }
 
           // Resolve exact warehouse match before inferring Egg vs General Inventory
           const exactWarehouseMatch = inventories.find(
@@ -1001,10 +1227,41 @@ export const bulkImportControllers = {
           }
           record.ItemType = resolvedItemType;
 
-          if (!customerName) {
-            errors.push('Missing CustomerName');
-            status = 'Invalid';
+          if (qty <= 0 && (price > 0 || rawTotalAmt > 0) && itemName) {
+            qty = 1;
+            details.push('Missing Quantity defaulted to 1.');
           }
+          if (price === 0 && rawTotalAmt > 0 && qty > 0) {
+            price = Number((rawTotalAmt / qty).toFixed(4));
+            details.push(`Computed UnitPrice (${price}) from TotalAmount / Quantity.`);
+          } else if (price === 0 && exactWarehouseMatch && Number(exactWarehouseMatch.UnitPrice) > 0) {
+            price = Number(exactWarehouseMatch.UnitPrice);
+            details.push(`Auto-filled UnitPrice (${price}) from item catalog.`);
+          }
+
+          const gstPerc = cleanFloat(record.GSTPercentage || 0);
+          const discount = cleanFloat(record.Discount || 0);
+          const otherCharges = cleanFloat(record.OtherCharges || 0);
+          let receivedAmt = cleanFloat(record.ReceivedAmount || 0);
+          const estGrandTotal = Math.max(0, (qty * price) * (1 + gstPerc / 100) + otherCharges - discount);
+          const explicitStatus = (record.Status || '').trim().toLowerCase();
+
+          if (receivedAmt === 0 && estGrandTotal > 0 && explicitStatus !== 'unpaid' && explicitStatus !== 'credit' && explicitStatus !== 'due') {
+            if (explicitStatus === 'paid' || explicitStatus === 'cash' || (!explicitStatus && (record.ReceivedAmount === undefined || record.ReceivedAmount === ''))) {
+              receivedAmt = Number(estGrandTotal.toFixed(2));
+            }
+          }
+          if (!record.Status) {
+            record.Status = receivedAmt >= estGrandTotal - 0.01 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
+          }
+
+          record.Quantity = String(qty);
+          record.UnitPrice = String(price);
+          record.GSTPercentage = String(gstPerc);
+          record.Discount = String(discount);
+          record.OtherCharges = String(otherCharges);
+          record.ReceivedAmount = String(receivedAmt);
+
           if (!saleDate || !/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) {
             errors.push('Missing or invalid SaleDate (YYYY-MM-DD)');
             status = 'Invalid';
@@ -1067,8 +1324,11 @@ export const bulkImportControllers = {
             } else {
               // General Inventory
               if (!exactWarehouseMatch) {
-                errors.push(`Item "${itemName}" is not registered in Warehouse Stock`);
-                status = 'Invalid';
+                const inferredCat = inferItemCategory(itemName, '', 0, price, record.Notes);
+                const inferredUom = inferUnitOfMeasurement(itemName, '', inferredCat.category, record.Notes);
+                record._autoCreateCategory = inferredCat.category;
+                record._autoCreateUom = inferredUom.uom;
+                details.push(`New warehouse item "${itemName}" (${inferredCat.category}, ${inferredUom.uom}) will be auto-registered on commit.`);
               } else {
                 record._inventoryId = exactWarehouseMatch.Id;
                 details.push(`Matched Item: "${itemName}" (Stock ID: ${exactWarehouseMatch.Id})`);
@@ -1465,6 +1725,16 @@ export const bulkImportControllers = {
           if (s.CompanyName) supplierCache.set(s.CompanyName.toLowerCase().trim(), Number(s.Id));
         });
 
+        const { data: existingFarmInvs } = await supabaseServer
+          .from('Inventories')
+          .select('Id, ItemName')
+          .eq('FarmId', targetFarmId)
+          .limit(50000);
+        const invByNameCache = new Map<string, number>();
+        (existingFarmInvs || []).forEach((inv: any) => {
+          if (inv.ItemName) invByNameCache.set(inv.ItemName.toLowerCase().trim(), Number(inv.Id));
+        });
+
         // Group lines sharing a non-empty InvoiceNumber into one parent Purchase + multiple PurchaseItems
         const groupedBatches: Array<{ invoiceNo: string; lines: any[] }> = [];
         const invoiceGroupMap = new Map<string, { invoiceNo: string; lines: any[] }>();
@@ -1490,7 +1760,7 @@ export const bulkImportControllers = {
 
         for (const batch of groupedBatches) {
           const first = batch.lines[0];
-          const supplierName = (first.SupplierName || '').trim();
+          const supplierName = (first.SupplierName || '').trim() || 'General Supplier';
           const supKey = supplierName.toLowerCase();
           let supplierId = first._supplierId ? Number(first._supplierId) : supplierCache.get(supKey);
 
@@ -1529,9 +1799,41 @@ export const bulkImportControllers = {
             const lineGst = lineTotal * (gstPerc / 100);
             batchSubTotal += lineTotal;
             batchGst += lineGst;
+
+            const itemType = rec.ItemType === 'Flock' ? 'Flock' : 'Inventory';
+            const itemName = (rec.ItemName || '').trim();
+            let inventoryId: number | null = rec._inventoryId ? Number(rec._inventoryId) : null;
+            if (itemType === 'Inventory' && !inventoryId && itemName) {
+              inventoryId = invByNameCache.get(itemName.toLowerCase()) || null;
+              if (!inventoryId) {
+                const infCat = rec._autoCreateCategory || inferItemCategory(itemName, '', price, 0, rec.Notes).category;
+                const infUom = rec._autoCreateUom || inferUnitOfMeasurement(itemName, '', infCat, rec.Notes).uom;
+                const { data: createdInv } = await supabaseServer
+                  .from('Inventories')
+                  .insert([{
+                    FarmId: targetFarmId,
+                    ItemName: itemName,
+                    Category: infCat,
+                    UnitOfMeasurement: infUom,
+                    UnitPrice: price,
+                    SellingPrice: 0,
+                    CurrentStock: 0,
+                    WeightPerUnit: 1,
+                    MinThreshold: 0,
+                    Notes: 'Auto-created during Bulk Purchase Import'
+                  }])
+                  .select('Id')
+                  .maybeSingle();
+                if (createdInv?.Id) {
+                  inventoryId = Number(createdInv.Id);
+                  invByNameCache.set(itemName.toLowerCase(), inventoryId);
+                }
+              }
+            }
+
             preparedLines.push({
-              inventoryId: rec._inventoryId ? Number(rec._inventoryId) : null,
-              itemType: rec.ItemType === 'Flock' ? 'Flock' : 'Inventory',
+              inventoryId,
+              itemType,
               qty,
               price,
               gstPerc,
@@ -1681,6 +1983,16 @@ export const bulkImportControllers = {
           return firstAny || null;
         };
 
+        const { data: existingSaleFarmInvs } = await supabaseServer
+          .from('Inventories')
+          .select('Id, ItemName')
+          .eq('FarmId', targetFarmId)
+          .limit(50000);
+        const saleInvByNameCache = new Map<string, number>();
+        (existingSaleFarmInvs || []).forEach((inv: any) => {
+          if (inv.ItemName) saleInvByNameCache.set(inv.ItemName.toLowerCase().trim(), Number(inv.Id));
+        });
+
         // Group lines sharing a non-empty InvoiceNumber into one parent Sales invoice + multiple SaleItems
         const groupedSales: Array<{ invoiceNo: string; lines: any[] }> = [];
         const invoiceGroupMap = new Map<string, { invoiceNo: string; lines: any[] }>();
@@ -1706,7 +2018,7 @@ export const bulkImportControllers = {
 
         for (const batch of groupedSales) {
           const first = batch.lines[0];
-          const customerName = (first.CustomerName || '').trim();
+          const customerName = (first.CustomerName || '').trim() || 'Walk-in Customer';
           const custKey = customerName.toLowerCase();
           let custEntry = customerCache.get(custKey);
 
@@ -1788,11 +2100,40 @@ export const bulkImportControllers = {
               eggInventoryId = foundId || null;
             }
 
+            let inventoryId: number | null = rec._inventoryId ? Number(rec._inventoryId) : null;
+            if (itemType === 'General Inventory' && !inventoryId && itemName) {
+              inventoryId = saleInvByNameCache.get(itemName.toLowerCase()) || null;
+              if (!inventoryId) {
+                const infCat = rec._autoCreateCategory || inferItemCategory(itemName, '', 0, price, rec.Notes).category;
+                const infUom = rec._autoCreateUom || inferUnitOfMeasurement(itemName, '', infCat, rec.Notes).uom;
+                const { data: createdInv } = await supabaseServer
+                  .from('Inventories')
+                  .insert([{
+                    FarmId: targetFarmId,
+                    ItemName: itemName,
+                    Category: infCat,
+                    UnitOfMeasurement: infUom,
+                    UnitPrice: 0,
+                    SellingPrice: price,
+                    CurrentStock: 0,
+                    WeightPerUnit: 1,
+                    MinThreshold: 0,
+                    Notes: 'Auto-created during Bulk Sales Import'
+                  }])
+                  .select('Id')
+                  .maybeSingle();
+                if (createdInv?.Id) {
+                  inventoryId = Number(createdInv.Id);
+                  saleInvByNameCache.set(itemName.toLowerCase(), inventoryId);
+                }
+              }
+            }
+
             preparedItems.push({
               itemType,
               flockId: rec._flockId ? Number(rec._flockId) : null,
               eggInventoryId,
-              inventoryId: rec._inventoryId ? Number(rec._inventoryId) : null,
+              inventoryId,
               qty,
               price,
               gstPerc,
@@ -1960,7 +2301,7 @@ export const bulkImportControllers = {
 
   // POST /api/bulk-import/ai-excel-parse
   async parseAiExcelImport(req: Request, res: Response) {
-    const { fileBase64, type } = req.body || {};
+    const { fileBase64, type, fileName, autoDetectType } = req.body || {};
     if (!fileBase64) {
       return res.status(400).json({ error: 'Missing required fileBase64 for AI Excel processing.' });
     }
@@ -1976,7 +2317,7 @@ export const bulkImportControllers = {
       const buffer = Buffer.from(cleanBase64, 'base64');
       const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false, cellNF: true, cellText: true });
 
-      const targetType = (type || 'sales') as 'sales' | 'purchases' | 'items' | 'daily-logs';
+      const requestedType = (type || 'sales') as BulkImportType;
 
       const SCHEMA_HEADERS: Record<string, string[]> = {
         sales: ['InvoiceNumber', 'CustomerName', 'SaleDate', 'ItemName', 'ItemType', 'Quantity', 'UnitPrice', 'GSTPercentage', 'Discount', 'OtherCharges', 'ReceivedAmount', 'Status', 'Notes'],
@@ -1984,8 +2325,6 @@ export const bulkImportControllers = {
         items: ['ItemName', 'Category', 'UnitOfMeasurement', 'UnitPrice', 'SellingPrice', 'CurrentStock', 'WeightPerUnit', 'MinThreshold', 'Notes'],
         'daily-logs': ['FlockName', 'LogDate', 'FeedName', 'FeedConsumedKg', 'MortalityCount', 'EggsCollected', 'DamagedEggsCollected', 'WaterConsumed', 'DailyAverageWeight', 'BirdsEatenBySelf', 'BirdsEatenValue', 'EggsGifted', 'EggsGiftedValue', 'Notes']
       };
-
-      const targetHeaders = SCHEMA_HEADERS[targetType] || SCHEMA_HEADERS.sales;
 
       // Extract clean non-empty rows per sheet with formatted string values (raw: false avoids opaque Excel serials)
       const sheetsContent: Array<{ name: string; rows: any[][] }> = [];
@@ -2013,6 +2352,14 @@ export const bulkImportControllers = {
         return res.status(400).json({ error: 'The uploaded workbook contains no readable rows.' });
       }
 
+      const detection = autoDetectType === false
+        ? { detectedType: requestedType, confidence: 0, reason: '' }
+        : detectWorkbookLedgerType(String(fileName || ''), sheetsContent, requestedType);
+
+      const targetType = detection.detectedType;
+      const autoDetected = targetType !== requestedType;
+      const targetHeaders = SCHEMA_HEADERS[targetType] || SCHEMA_HEADERS.sales;
+
       // Build field schema dynamically for structured Gemini JSON output
       const recordProperties: Record<string, any> = {};
       for (const h of targetHeaders) {
@@ -2034,7 +2381,7 @@ export const bulkImportControllers = {
         required: ['summary', 'records']
       };
 
-      const CANDIDATE_MODELS = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+      const CANDIDATE_MODELS = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen', 'gemini-flash-latest'];
 
       const buildPromptForSheets = (sheetsPayload: Array<{ name: string; rows: any[][] }>) => {
         const formattedSheets = sheetsPayload
@@ -2042,7 +2389,7 @@ export const bulkImportControllers = {
           .join('\n\n');
 
         return `You are a precision data transformation engine for Poultry LMS 360.
-Transform the uploaded spreadsheet workbook (sheets: ${workbook.SheetNames.join(', ')}) into structured JSON records strictly matching the "${targetType}" database schema.
+Transform the uploaded spreadsheet workbook${fileName ? ` ("${fileName}")` : ''} (sheets: ${workbook.SheetNames.join(', ')}) into structured JSON records strictly matching the "${targetType}" database schema.
 
 Target JSON record fields (ALL values returned cleanly):
 ${targetHeaders.join(', ')}
@@ -2050,48 +2397,70 @@ ${targetHeaders.join(', ')}
 Workbook Data:
 ${formattedSheets}
 
-STRICT TRANSFORMATION RULES:
+STRICT TRANSFORMATION & INTELLIGENT MISSING-VALUE RULES:
 1. Examine EVERY worksheet and detect multi-tab relationships (e.g. separate Sales Header and Sale Items sheets linked by invoice/bill number, or single-sheet accounting reports).
 2. Ignore report title headers, blank rows, column subheaders, and summary/subtotal/"Total"/"Grand Total" footer rows.
-3. Hierarchical/grouped invoices: if an accounting report prints Date, Invoice No, or Customer Name only on the first row of a group and leaves subsequent item rows blank for those columns, carry them down to every item row belonging to that invoice.
+3. Hierarchical/grouped rows: if an accounting report prints Date, Invoice No, Customer/Supplier Name, or Flock only on the first row of a group and leaves subsequent rows blank, carry them down to every row in that group.
 4. DATES: Convert EVERY date ("SaleDate", "PurchaseDate", or "LogDate") into strict "YYYY-MM-DD" format. Assume DD-MM-YYYY / DD/MM/YYYY ordering when ambiguous (e.g. "01-04-2026" -> "2026-04-01", "15/11/2026" -> "2026-11-15").
-5. FOR "sales":
-   - If the item is eggs (e.g. "Eggs", "Fresh Eggs", "Table Eggs", "White Eggs", "Brown Eggs", "Damaged Eggs", "Anda", etc.), set "ItemType" strictly to "Egg" and keep the item label in "ItemName".
-   - If the item is live birds (broilers, layers, hens, culls, flock), set "ItemType" strictly to "Bird".
-   - Otherwise set "ItemType" to "General Inventory".
-   - If "Status" is Paid/Cash or ReceivedAmount equals total, set "Status" to "Paid" (options: "Paid", "Partial", "Unpaid"). Fill numeric strings without currency symbols or commas (e.g. "1250.50", "0").
-6. FOR "purchases":
-   - Set "ItemType" to "Flock" for live birds/chicks/flocks, or "Inventory" otherwise. Format numbers cleanly without currency symbols.
-7. Transform ALL valid data rows from the sheets — do NOT truncate or skip rows.`;
+5. NEVER LEAVE REQUIRED FIELDS EMPTY IF THEY CAN BE INFERRED FROM CONTEXT:
+   - FOR "items":
+     * Deduplicate unique item names across the sheet when generating item master rows, OR fill every row cleanly.
+     * "Category" MUST strictly be one of: "Feed", "Medicine", "Equipment", "Sales Item", "Raw Ingredient". NEVER return empty string for Category — infer intelligently from the item name/context (e.g., Eggs/Meat/Birds -> "Sales Item", Starter/Layer/Mash -> "Feed", Vaccine/Vitamin -> "Medicine", Feeder/Tray -> "Equipment", Maize/Soya/LSP -> "Raw Ingredient").
+     * "UnitOfMeasurement" MUST NEVER be empty — infer from item name/units/rates (e.g., "Pieces", "Tray-30", "Kg", "Bag", "Bottle", "Dozen").
+     * Fill missing "UnitPrice", "SellingPrice", "CurrentStock", "MinThreshold" as "0" and "WeightPerUnit" as "1".
+   - FOR "sales":
+     * If item is eggs (e.g. "Eggs", "Fresh Eggs", "Table Eggs", "Damaged Eggs", etc.), set "ItemType" strictly to "Egg". For live birds/flocks -> "Bird". Otherwise -> "General Inventory".
+     * If "CustomerName" is absent, infer "Walk-in Customer".
+     * If "UnitPrice" is missing but Quantity & Total Amount exist, compute UnitPrice = Amount / Quantity.
+     * If "Status" is Paid/Cash or absent on a cash/retail report, set "Status" to "Paid" ("Paid", "Partial", "Unpaid") and infer "ReceivedAmount". Strip currency symbols/commas from numbers.
+   - FOR "purchases":
+     * Set "ItemType" to "Flock" for live birds/chicks/flocks, or "Inventory" otherwise. Infer "General Supplier" if supplier is missing. Compute missing UnitPrice from Amount/Quantity if present.
+   - FOR "daily-logs":
+     * Fill missing numeric metrics with "0" and extract clean YYYY-MM-DD dates.
+6. Transform ALL valid data rows from the sheets — do NOT truncate or skip valid rows.`;
       };
 
       const callGeminiWithFailover = async (promptText: string) => {
         let lastErr: any = null;
-        for (let i = 0; i < CANDIDATE_MODELS.length; i++) {
-          const model = CANDIDATE_MODELS[i];
-          try {
-            const genPromise = clientInfo.client.models.generateContent({
-              model,
-              contents: promptText,
-              config: {
-                responseMimeType: 'application/json',
-                responseSchema
+        const maxKeyAttempts = Math.max(1, keyPool.getKeyCount());
+        const triedKeys = new Set<string>();
+
+        for (let k = 0; k < maxKeyAttempts; k++) {
+          const activeClientInfo = k === 0 ? clientInfo : keyPool.getNextClient();
+          if (!activeClientInfo || triedKeys.has(activeClientInfo.keyId)) continue;
+          triedKeys.add(activeClientInfo.keyId);
+
+          for (let i = 0; i < CANDIDATE_MODELS.length; i++) {
+            const model = CANDIDATE_MODELS[i];
+            try {
+              const genPromise = activeClientInfo.client.models.generateContent({
+                model,
+                contents: promptText,
+                config: {
+                  responseMimeType: 'application/json',
+                  responseSchema
+                }
+              });
+              const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(`Timeout: Model ${model} exceeded 20 seconds`)), 20000)
+              );
+              const response: any = await Promise.race([genPromise, timeoutPromise]);
+              const parsed = JSON.parse(response.text?.trim() || '{}');
+              if (parsed && Array.isArray(parsed.records)) {
+                return parsed;
               }
-            });
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`Timeout: Model ${model} exceeded 45 seconds`)), 45000)
-            );
-            const response: any = await Promise.race([genPromise, timeoutPromise]);
-            const parsed = JSON.parse(response.text?.trim() || '{}');
-            if (parsed && Array.isArray(parsed.records)) {
-              return parsed;
-            }
-          } catch (err: any) {
-            lastErr = err;
-            const status = err.status || err.code || (err.error && err.error.code);
-            const msg = (err.message || '').toLowerCase();
-            if (status === 429 || msg.includes('quota') || msg.includes('resource_exhausted')) {
-              keyPool.markKeyCooldown(clientInfo.keyId, 15 * 60 * 1000);
+            } catch (err: any) {
+              lastErr = err;
+              const status = err.status || err.code || (err.error && err.error.code);
+              const msg = (err.message || '').toLowerCase();
+              if (status === 429 || msg.includes('quota') || msg.includes('resource_exhausted')) {
+                keyPool.markKeyCooldown(activeClientInfo.keyId, 15 * 60 * 1000);
+                break; // Switch immediately to next key in pool
+              }
+              if (status === 400 || status === 401 || status === 403 || msg.includes('api key')) {
+                keyPool.markKeyCooldown(activeClientInfo.keyId, 15 * 60 * 1000);
+                break; // Invalid/unauthorized key -> switch immediately to next key
+              }
             }
           }
         }
@@ -2129,34 +2498,62 @@ STRICT TRANSFORMATION RULES:
         throw new Error('No importable data rows were found in the uploaded spreadsheet.');
       }
 
-      // Deterministic server-side post-normalization on every transformed JSON record
+      // Deterministic server-side post-normalization & missing-value discovery on every transformed JSON record
+      let carrySaleDate = '';
+      let carryPurchaseDate = '';
+      let carryLogDate = '';
+
       const cleanedJsonRecords = allJsonRecords.map((rawRec) => {
         const rec: Record<string, any> = {};
         for (const h of targetHeaders) {
           rec[h] = rawRec?.[h] !== undefined && rawRec?.[h] !== null ? String(rawRec[h]).trim() : '';
         }
         if (targetType === 'sales') {
-          rec.SaleDate = cleanDate(rec.SaleDate);
+          rec.SaleDate = cleanDate(rec.SaleDate) || carrySaleDate;
+          if (rec.SaleDate) carrySaleDate = rec.SaleDate;
+          if (!rec.CustomerName) rec.CustomerName = 'Walk-in Customer';
           if (isEggItemName(rec.ItemName, rec.ItemType)) {
             rec.ItemType = 'Egg';
+          } else if (!rec.ItemType) {
+            rec.ItemType = 'General Inventory';
           }
         } else if (targetType === 'purchases') {
-          rec.PurchaseDate = cleanDate(rec.PurchaseDate);
+          rec.PurchaseDate = cleanDate(rec.PurchaseDate) || carryPurchaseDate;
+          if (rec.PurchaseDate) carryPurchaseDate = rec.PurchaseDate;
+          if (!rec.SupplierName) rec.SupplierName = 'General Supplier';
+          if (!rec.ItemType) rec.ItemType = 'Inventory';
         } else if (targetType === 'daily-logs') {
-          rec.LogDate = cleanDate(rec.LogDate);
+          rec.LogDate = cleanDate(rec.LogDate) || carryLogDate;
+          if (rec.LogDate) carryLogDate = rec.LogDate;
+        } else if (targetType === 'items') {
+          const unitP = cleanFloat(rec.UnitPrice || 0);
+          const sellP = cleanFloat(rec.SellingPrice || 0);
+          const catInf = inferItemCategory(rec.ItemName, rec.Category, unitP, sellP, rec.Notes);
+          rec.Category = catInf.category;
+          const uomInf = inferUnitOfMeasurement(rec.ItemName, rec.UnitOfMeasurement, rec.Category, rec.Notes);
+          rec.UnitOfMeasurement = uomInf.uom;
+          rec.UnitPrice = String(unitP);
+          rec.SellingPrice = String(sellP);
+          rec.CurrentStock = String(cleanFloat(rec.CurrentStock || 0));
+          rec.WeightPerUnit = String(cleanFloat(rec.WeightPerUnit || 1) || 1);
+          rec.MinThreshold = String(cleanFloat(rec.MinThreshold || 0));
         }
         return rec;
       });
 
       const csvContent = recordsToCsv(targetHeaders, cleanedJsonRecords);
+      const summaryPrefix = autoDetected
+        ? `Auto-detected ledger type: ${targetType.toUpperCase()}. `
+        : '';
 
       return res.json({
         success: true,
         type: targetType,
+        autoDetected,
         jsonRecords: cleanedJsonRecords,
         csvContent,
         headers: targetHeaders,
-        summary: combinedSummary || `Transformed ${cleanedJsonRecords.length} rows across ${workbook.SheetNames.length} tab(s).`,
+        summary: `${summaryPrefix}${combinedSummary || `Transformed ${cleanedJsonRecords.length} rows across ${workbook.SheetNames.length} tab(s).`}`,
         sheetsProcessed: workbook.SheetNames
       });
 
