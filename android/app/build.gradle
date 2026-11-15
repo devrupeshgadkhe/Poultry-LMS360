@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+}
+
+def ciRunNum = System.getenv("GITHUB_RUN_NUMBER") ? System.getenv("GITHUB_RUN_NUMBER").toInteger() : 10
+def resolvedVersionCode = project.hasProperty('APP_VERSION_CODE') ? project.property('APP_VERSION_CODE').toInteger() : (100 + ciRunNum)
+def resolvedVersionName = project.hasProperty('APP_VERSION_NAME') ? project.property('APP_VERSION_NAME').toString() : "1.0.${ciRunNum}"
+
+android {
+    namespace 'com.poultrylms360.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.poultrylms360.app"
+        minSdk 24
+        targetSdk 34
+        versionCode resolvedVersionCode
+        versionName resolvedVersionName
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("poultry-lms-signing.p12")
+            storePassword "poultrylms360"
+            keyAlias "poultrykey"
+            keyPassword "poultrylms360"
+            storeType "PKCS12"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    implementation 'androidx.webkit:webkit:1.10.0'
+    implementation 'androidx.core:core:1.12.0'
+}
