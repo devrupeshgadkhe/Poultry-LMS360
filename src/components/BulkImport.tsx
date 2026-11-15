@@ -88,6 +88,29 @@ function readFileAsText(file: File): Promise<string> {
   });
 }
 
+async function parseJsonResponseSafely(res: Response, fallbackError: string): Promise<any> {
+  const rawText = await res.text();
+  if (!rawText) {
+    if (!res.ok) throw new Error(`${fallbackError} (HTTP ${res.status})`);
+    return {};
+  }
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    const isHtml = /^\s*</.test(rawText);
+    if (res.status === 504 || /timeout|timed\s*out/i.test(rawText)) {
+      throw new Error('Server request timed out while processing the spreadsheet. Please retry or upload a smaller batch.');
+    }
+    if (res.status === 413) {
+      throw new Error('Uploaded file exceeds server request size limit. Please split the workbook into smaller parts.');
+    }
+    if (isHtml) {
+      throw new Error(`${fallbackError} (Server returned HTTP ${res.status}).`);
+    }
+    throw new Error(rawText.slice(0, 200) || fallbackError);
+  }
+}
+
 export default function BulkImport({ currentLanguage }: BulkImportProps) {
   const bt = bulkImportTranslations[currentLanguage] || bulkImportTranslations['en'];
   const t = translations[currentLanguage];
@@ -139,7 +162,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
         })
       });
 
-      const data = await res.json();
+      const data = await parseJsonResponseSafely(res, 'Failed to transform Excel workbook into schema JSON.');
       if (!res.ok) {
         throw new Error(data.error || 'Failed to transform Excel workbook into schema JSON.');
       }
@@ -298,7 +321,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
         })
       });
 
-      const body = await response.json();
+      const body = await parseJsonResponseSafely(response, 'Failed to parse CSV spreadsheet entries.');
       if (!response.ok) {
         throw new Error(body.error || 'Failed to parse CSV spreadsheet entries.');
       }
@@ -334,7 +357,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
         })
       });
 
-      const body = await response.json();
+      const body = await parseJsonResponseSafely(response, 'Failed to sync data elements to core database.');
       if (!response.ok) {
         throw new Error(body.error || 'Failed to sync data elements to core database.');
       }

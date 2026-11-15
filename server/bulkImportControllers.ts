@@ -788,6 +788,392 @@ function recordsToCsv(headers: string[], records: Record<string, any>[]): string
   return lines.join('\n');
 }
 
+// Extended lookup helper for raw Excel header normalization
+function resolveRawHeaderToCanonical(rawHeader: string, targetType: BulkImportType): string | null {
+  const cleanKey = (rawHeader || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!cleanKey) return null;
+
+  const extraAccountingMap: Record<string, Record<string, string>> = {
+    sales: {
+      vchno: 'InvoiceNumber',
+      voucherno: 'InvoiceNumber',
+      vouchernumber: 'InvoiceNumber',
+      docno: 'InvoiceNumber',
+      refno: 'InvoiceNumber',
+      challanno: 'InvoiceNumber',
+      vchdate: 'SaleDate',
+      trandate: 'SaleDate',
+      billdate: 'SaleDate',
+      invoicedate: 'SaleDate',
+      party: 'CustomerName',
+      partyname: 'CustomerName',
+      ledger: 'CustomerName',
+      ledgername: 'CustomerName',
+      account: 'CustomerName',
+      accountname: 'CustomerName',
+      nameofitem: 'ItemName',
+      itemdescription: 'ItemName',
+      description: 'ItemName',
+      particular: 'ItemName',
+      particulars: 'ItemName',
+      totalqty: 'Quantity',
+      nos: 'Quantity',
+      trays: 'Quantity',
+      totalamount: 'TotalAmount',
+      grossamount: 'TotalAmount',
+      netamount: 'TotalAmount',
+      taxablevalue: 'TotalAmount',
+      amount: 'TotalAmount',
+      value: 'TotalAmount',
+      total: 'TotalAmount',
+      cgst: 'GSTPercentage',
+      sgst: 'GSTPercentage',
+      igst: 'GSTPercentage'
+    },
+    purchases: {
+      vchno: 'InvoiceNumber',
+      voucherno: 'InvoiceNumber',
+      docno: 'InvoiceNumber',
+      vchdate: 'PurchaseDate',
+      trandate: 'PurchaseDate',
+      billdate: 'PurchaseDate',
+      invoicedate: 'PurchaseDate',
+      party: 'SupplierName',
+      partyname: 'SupplierName',
+      ledger: 'SupplierName',
+      ledgername: 'SupplierName',
+      nameofitem: 'ItemName',
+      description: 'ItemName',
+      particular: 'ItemName',
+      particulars: 'ItemName',
+      totalqty: 'Quantity',
+      totalamount: 'TotalAmount',
+      grossamount: 'TotalAmount',
+      netamount: 'TotalAmount',
+      amount: 'TotalAmount',
+      value: 'TotalAmount',
+      total: 'TotalAmount'
+    },
+    items: {
+      name: 'ItemName',
+      nameofitem: 'ItemName',
+      itemdescription: 'ItemName',
+      particulars: 'ItemName',
+      unit: 'UnitOfMeasurement',
+      uom: 'UnitOfMeasurement',
+      qty: 'CurrentStock',
+      quantity: 'CurrentStock',
+      rate: 'UnitPrice',
+      price: 'SellingPrice'
+    },
+    'daily-logs': {
+      shed: 'FlockName',
+      batch: 'FlockName',
+      house: 'FlockName',
+      mortality: 'MortalityCount',
+      eggs: 'EggsCollected',
+      feed: 'FeedConsumedKg'
+    }
+  };
+
+  const primaryMap =
+    targetType === 'sales' ? SALES_HEADER_MAP :
+    targetType === 'purchases' ? PURCHASES_HEADER_MAP :
+    targetType === 'items' ? ITEMS_HEADER_MAP :
+    HEADER_KEY_MAP;
+
+  return (
+    primaryMap[cleanKey] ||
+    extraAccountingMap[targetType]?.[cleanKey] ||
+    HEADER_KEY_MAP[cleanKey] ||
+    null
+  );
+}
+
+function isSummaryOrSeparatorRow(row: string[]): boolean {
+  const nonEmpty = row.map(c => (c || '').trim()).filter(Boolean);
+  if (nonEmpty.length === 0) return true;
+  if (nonEmpty.every(c => /^[-=_*.\s]+$/.test(c))) return true;
+  const firstTwo = nonEmpty.slice(0, 2).join(' ').toLowerCase();
+  if (/^(total|grand\s*total|sub[\s-]*total|net\s*total|overall\s*total|summary|page\s*\d+|opening\s*bal|closing\s*bal|brought\s*forward|carried\s*forward)\b/i.test(firstTwo)) {
+    return true;
+  }
+  return false;
+}
+
+interface SheetMappingSpec {
+  sheetName: string;
+  role: 'primary' | 'header' | 'items' | 'ignore';
+  headerRowIndex: number;
+  joinKeyColumn?: string;
+  columnMap: Array<{ rawHeader: string; schemaField: string }>;
+  defaults?: Array<{ field: string; value: string }>;
+}
+
+function detectDeterministicSheetMapping(
+  sheetsContent: Array<{ name: string; rows: string[][] }>,
+  targetType: BulkImportType
+): SheetMappingSpec[] {
+  const specs: SheetMappingSpec[] = [];
+
+  for (const sheet of sheetsContent) {
+    let bestRowIdx = 0;
+    let bestScore = -1;
+    let bestMap: Array<{ rawHeader: string; schemaField: string }> = [];
+
+    const scanLimit = Math.min(sheet.rows.length, 30);
+    for (let r = 0; r < scanLimit; r++) {
+      const row = sheet.rows[r];
+      const mappedCols: Array<{ rawHeader: string; schemaField: string }> = [];
+      const seenFields = new Set<string>();
+      let textCells = 0;
+
+      row.forEach((cell, colIdx) => {
+        const hdr = (cell || '').trim();
+        if (!hdr) return;
+        if (!/^\d+(?:[.,]\d+)?$/.test(hdr)) textCells++;
+        const canonical = resolveRawHeaderToCanonical(hdr, targetType);
+        if (canonical && (!seenFields.has(canonical) || canonical === 'GSTPercentage')) {
+          seenFields.add(canonical);
+          mappedCols.push({ rawHeader: hdr, schemaField: canonical });
+        } else {
+          mappedCols.push({ rawHeader: hdr || `Col_${colIdx}`, schemaField: 'Ignore' });
+        }
+      });
+
+      const score = seenFields.size * 10 + (textCells >= 3 ? 2 : 0);
+      if (score > bestScore && seenFields.size >= 2) {
+        bestScore = score;
+        bestRowIdx = r;
+        bestMap = mappedCols;
+      }
+    }
+
+    if (bestScore >= 20) {
+      const defaults: Array<{ field: string; value: string }> = [];
+      const titleText = sheet.rows.slice(0, bestRowIdx).flat().join(' ');
+      if (targetType === 'sales' && !bestMap.some(m => m.schemaField === 'ItemName')) {
+        if (/\beggs?\b/i.test(titleText)) {
+          defaults.push({ field: 'ItemName', value: 'Eggs' });
+        }
+      }
+      specs.push({
+        sheetName: sheet.name,
+        role: 'primary',
+        headerRowIndex: bestRowIdx,
+        columnMap: bestMap,
+        defaults
+      });
+    }
+  }
+
+  if (specs.length >= 2) {
+    const headerSheet = specs.find(s =>
+      s.columnMap.some(m => m.schemaField === 'InvoiceNumber') &&
+      s.columnMap.some(m => m.schemaField === 'CustomerName' || m.schemaField === 'SupplierName' || m.schemaField === 'SaleDate' || m.schemaField === 'PurchaseDate') &&
+      !s.columnMap.some(m => m.schemaField === 'Quantity')
+    );
+    const itemsSheet = specs.find(s =>
+      s !== headerSheet &&
+      s.columnMap.some(m => m.schemaField === 'InvoiceNumber') &&
+      s.columnMap.some(m => m.schemaField === 'Quantity' || m.schemaField === 'ItemName')
+    );
+    if (headerSheet && itemsSheet) {
+      const joinColH = headerSheet.columnMap.find(m => m.schemaField === 'InvoiceNumber')?.rawHeader;
+      const joinColI = itemsSheet.columnMap.find(m => m.schemaField === 'InvoiceNumber')?.rawHeader;
+      if (joinColH && joinColI) {
+        headerSheet.role = 'header';
+        headerSheet.joinKeyColumn = joinColH;
+        itemsSheet.role = 'items';
+        itemsSheet.joinKeyColumn = joinColI;
+      }
+    }
+  }
+
+  return specs;
+}
+
+function applySheetMappingsToRecords(
+  sheetsContent: Array<{ name: string; rows: string[][] }>,
+  specs: SheetMappingSpec[],
+  targetType: BulkImportType,
+  targetHeaders: string[]
+): Record<string, any>[] {
+  const sheetByName = new Map<string, string[][]>(
+    sheetsContent.map(s => [s.name.toLowerCase().trim(), s.rows])
+  );
+
+  const extractMappedRowsForSpec = (spec: SheetMappingSpec): Array<Record<string, any>> => {
+    const rows = sheetByName.get((spec.sheetName || '').toLowerCase().trim()) || [];
+    if (rows.length === 0) return [];
+
+    // Verify headerRowIndex against nearby rows (+/- 2) in case AI index was slightly shifted
+    const specHeadersNorm = new Set(
+      (spec.columnMap || [])
+        .map(m => (m.rawHeader || '').toLowerCase().replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+    );
+    let headerRowIdx = Math.max(0, Math.min(spec.headerRowIndex || 0, rows.length - 1));
+    if (specHeadersNorm.size > 0) {
+      let bestMatchIdx = headerRowIdx;
+      let bestMatchCount = -1;
+      const startProbe = Math.max(0, headerRowIdx - 2);
+      const endProbe = Math.min(rows.length - 1, headerRowIdx + 2);
+      for (let p = startProbe; p <= endProbe; p++) {
+        const count = (rows[p] || []).filter(c =>
+          specHeadersNorm.has((c || '').toLowerCase().replace(/\s+/g, ' ').trim())
+        ).length;
+        if (count > bestMatchCount) {
+          bestMatchCount = count;
+          bestMatchIdx = p;
+        }
+      }
+      if (bestMatchCount > 0) headerRowIdx = bestMatchIdx;
+    }
+
+    const headerCells = rows[headerRowIdx] || [];
+    const colToField: Array<{ idx: number; field: string; rawHeader: string }> = [];
+    const assignedFields = new Set<string>();
+
+    headerCells.forEach((cell, idx) => {
+      const raw = (cell || '').trim();
+      const rawNorm = raw.toLowerCase().replace(/\s+/g, ' ').trim();
+      const fromSpec = (spec.columnMap || []).find(
+        m => m.rawHeader && m.rawHeader.toLowerCase().replace(/\s+/g, ' ').trim() === rawNorm
+      );
+      let schemaField =
+        fromSpec && fromSpec.schemaField
+          ? fromSpec.schemaField
+          : resolveRawHeaderToCanonical(raw, targetType);
+
+      if (schemaField === 'Ignore') return;
+      if (schemaField && (!assignedFields.has(schemaField) || schemaField === 'GSTPercentage')) {
+        assignedFields.add(schemaField);
+        colToField.push({ idx, field: schemaField, rawHeader: raw });
+      }
+    });
+
+    if (colToField.length === 0 && Array.isArray(spec.columnMap)) {
+      spec.columnMap.forEach((m, idx) => {
+        if (m.schemaField && m.schemaField !== 'Ignore') {
+          colToField.push({ idx, field: m.schemaField, rawHeader: m.rawHeader });
+        }
+      });
+    }
+
+    const out: Array<Record<string, any>> = [];
+    let lastGroupInvoice = '';
+    let lastGroupDate = '';
+    let lastGroupParty = '';
+    let lastGroupFlock = '';
+
+    for (let r = headerRowIdx + 1; r < rows.length; r++) {
+      const row = rows[r];
+      if (!row || isSummaryOrSeparatorRow(row)) continue;
+
+      const matchesHeaderCount = colToField.filter(
+        c => (row[c.idx] || '').trim().toLowerCase() === c.rawHeader.toLowerCase()
+      ).length;
+      if (matchesHeaderCount >= Math.max(2, colToField.length - 1)) continue;
+
+      const rec: Record<string, any> = {};
+      for (const h of targetHeaders) rec[h] = '';
+      if (Array.isArray(spec.defaults)) {
+        for (const d of spec.defaults) {
+          if (d.field && d.value && !rec[d.field]) rec[d.field] = d.value;
+        }
+      }
+
+      for (const { idx, field } of colToField) {
+        const val = row[idx] !== undefined && row[idx] !== null ? String(row[idx]).trim() : '';
+        if (val !== '') {
+          if (!rec[field]) {
+            rec[field] = val;
+          } else if (field === 'GSTPercentage') {
+            rec[field] = String(cleanFloat(rec[field]) + cleanFloat(val));
+          }
+        }
+      }
+
+      const hasUsefulData =
+        Boolean(rec.ItemName) ||
+        Boolean(rec.Quantity) ||
+        Boolean(rec.UnitPrice) ||
+        Boolean(rec.TotalAmount) ||
+        Boolean(rec.EggsCollected) ||
+        Boolean(rec.FeedConsumedKg) ||
+        Boolean(rec.MortalityCount) ||
+        Boolean(rec.CustomerName) ||
+        Boolean(rec.SupplierName) ||
+        Boolean(rec.InvoiceNumber);
+
+      if (!hasUsefulData) continue;
+
+      if (targetType === 'sales') {
+        if (rec.SaleDate) lastGroupDate = rec.SaleDate;
+        else if (lastGroupDate && (rec.ItemName || rec.Quantity || rec.TotalAmount)) rec.SaleDate = lastGroupDate;
+
+        if (rec.InvoiceNumber) lastGroupInvoice = rec.InvoiceNumber;
+        else if (lastGroupInvoice && (rec.ItemName || rec.Quantity)) rec.InvoiceNumber = lastGroupInvoice;
+
+        if (rec.CustomerName) lastGroupParty = rec.CustomerName;
+        else if (lastGroupParty && (rec.ItemName || rec.Quantity)) rec.CustomerName = lastGroupParty;
+      } else if (targetType === 'purchases') {
+        if (rec.PurchaseDate) lastGroupDate = rec.PurchaseDate;
+        else if (lastGroupDate && (rec.ItemName || rec.Quantity || rec.TotalAmount)) rec.PurchaseDate = lastGroupDate;
+
+        if (rec.InvoiceNumber) lastGroupInvoice = rec.InvoiceNumber;
+        else if (lastGroupInvoice && (rec.ItemName || rec.Quantity)) rec.InvoiceNumber = lastGroupInvoice;
+
+        if (rec.SupplierName) lastGroupParty = rec.SupplierName;
+        else if (lastGroupParty && (rec.ItemName || rec.Quantity)) rec.SupplierName = lastGroupParty;
+      } else if (targetType === 'daily-logs') {
+        if (rec.LogDate) lastGroupDate = rec.LogDate;
+        else if (lastGroupDate) rec.LogDate = lastGroupDate;
+
+        if (rec.FlockName) lastGroupFlock = rec.FlockName;
+        else if (lastGroupFlock) rec.FlockName = lastGroupFlock;
+      }
+
+      out.push(rec);
+    }
+
+    return out;
+  };
+
+  const headerSpec = specs.find(s => s.role === 'header');
+  const itemsSpec = specs.find(s => s.role === 'items');
+  if (headerSpec && itemsSpec) {
+    const headerRows = extractMappedRowsForSpec(headerSpec);
+    const itemRows = extractMappedRowsForSpec(itemsSpec);
+    const headerByInv = new Map<string, Record<string, any>>();
+    for (const hr of headerRows) {
+      const key = String(hr.InvoiceNumber || '').toLowerCase().trim();
+      if (key) headerByInv.set(key, hr);
+    }
+    if (itemRows.length > 0 && headerByInv.size > 0) {
+      return itemRows.map(ir => {
+        const key = String(ir.InvoiceNumber || '').toLowerCase().trim();
+        const hdr = headerByInv.get(key) || {};
+        const merged: Record<string, any> = {};
+        for (const h of targetHeaders) {
+          merged[h] = ir[h] || hdr[h] || '';
+        }
+        if (ir.TotalAmount && !merged.TotalAmount) merged.TotalAmount = ir.TotalAmount;
+        else if (hdr.TotalAmount && !merged.TotalAmount) merged.TotalAmount = hdr.TotalAmount;
+        return merged;
+      });
+    }
+  }
+
+  const allRows: Record<string, any>[] = [];
+  for (const spec of specs) {
+    if (spec.role === 'ignore') continue;
+    allRows.push(...extractMappedRowsForSpec(spec));
+  }
+  return allRows;
+}
+
 export const bulkImportControllers = {
   // POST /api/bulk-import/parse
   async parseImportData(req: Request, res: Response) {
@@ -1222,7 +1608,11 @@ export const bulkImportControllers = {
           ) {
             // Item "Eggs" or egg varieties should automatically map to collected eggs in EggInventories
             resolvedItemType = 'Egg';
-          } else if (!exactWarehouseMatch && /\b(bird|birds|hen|hens|broiler|layer|cull|culls|flock)\b/i.test(itemName)) {
+          } else if (
+            !exactWarehouseMatch &&
+            !/\b(feed|mash|crumble|pellet|starter|grower|finisher|concentrate|premix|ration|medicine|vaccine|feeder|drinker|tray)\b/i.test(itemName) &&
+            /\b(bird|birds|hen|hens|broiler|layer|cull|culls|flock)\b/i.test(itemName)
+          ) {
             resolvedItemType = 'Bird';
           }
           record.ItemType = resolvedItemType;
@@ -2306,19 +2696,12 @@ export const bulkImportControllers = {
       return res.status(400).json({ error: 'Missing required fileBase64 for AI Excel processing.' });
     }
 
-    await keyPool.ensureSynced();
-    const clientInfo = keyPool.getNextClient();
-    if (!clientInfo) {
-      return res.status(503).json({ error: 'Gemini AI API key is not configured on the server. Please add an API key in Developer Tools.' });
-    }
-
     try {
       const cleanBase64 = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
       const buffer = Buffer.from(cleanBase64, 'base64');
       const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false, cellNF: true, cellText: true });
 
       const requestedType = (type || 'sales') as BulkImportType;
-
       const SCHEMA_HEADERS: Record<string, string[]> = {
         sales: ['InvoiceNumber', 'CustomerName', 'SaleDate', 'ItemName', 'ItemType', 'Quantity', 'UnitPrice', 'GSTPercentage', 'Discount', 'OtherCharges', 'ReceivedAmount', 'Status', 'Notes'],
         purchases: ['InvoiceNumber', 'SupplierName', 'PurchaseDate', 'ItemName', 'ItemType', 'Quantity', 'UnitPrice', 'GSTPercentage', 'ReceivedAmount', 'Status', 'Notes'],
@@ -2326,10 +2709,7 @@ export const bulkImportControllers = {
         'daily-logs': ['FlockName', 'LogDate', 'FeedName', 'FeedConsumedKg', 'MortalityCount', 'EggsCollected', 'DamagedEggsCollected', 'WaterConsumed', 'DailyAverageWeight', 'BirdsEatenBySelf', 'BirdsEatenValue', 'EggsGifted', 'EggsGiftedValue', 'Notes']
       };
 
-      // Extract clean non-empty rows per sheet with formatted string values (raw: false avoids opaque Excel serials)
-      const sheetsContent: Array<{ name: string; rows: any[][] }> = [];
-      let totalSerializedChars = 0;
-
+      const sheetsContent: Array<{ name: string; rows: string[][] }> = [];
       for (const sheetName of workbook.SheetNames) {
         const sheet = workbook.Sheets[sheetName];
         if (!sheet) continue;
@@ -2341,10 +2721,8 @@ export const bulkImportControllers = {
             return arr;
           })
           .filter(row => row.some(cell => cell !== ''));
-
         if (cleanedRows.length > 0) {
           sheetsContent.push({ name: sheetName, rows: cleanedRows });
-          totalSerializedChars += JSON.stringify(cleanedRows).length;
         }
       }
 
@@ -2355,82 +2733,96 @@ export const bulkImportControllers = {
       const detection = autoDetectType === false
         ? { detectedType: requestedType, confidence: 0, reason: '' }
         : detectWorkbookLedgerType(String(fileName || ''), sheetsContent, requestedType);
-
       const targetType = detection.detectedType;
       const autoDetected = targetType !== requestedType;
       const targetHeaders = SCHEMA_HEADERS[targetType] || SCHEMA_HEADERS.sales;
 
-      // Build field schema dynamically for structured Gemini JSON output
-      const recordProperties: Record<string, any> = {};
-      for (const h of targetHeaders) {
-        recordProperties[h] = { type: Type.STRING };
-      }
+      await keyPool.ensureSynced();
+      const clientInfo = keyPool.getNextClient();
 
-      const responseSchema = {
+      const CANDIDATE_MODELS = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen', 'gemini-flash-latest'];
+      const mappingFieldsEnum = Array.from(new Set([...targetHeaders, 'TotalAmount', 'Ignore']));
+
+      const mappingResponseSchema = {
         type: Type.OBJECT,
         properties: {
-          summary: { type: Type.STRING, description: 'Short explanation of worksheets processed and column mappings.' },
-          records: {
+          summary: { type: Type.STRING, description: 'Short explanation of worksheets and column mappings detected.' },
+          mappings: {
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
-              properties: recordProperties
+              properties: {
+                sheetName: { type: Type.STRING },
+                role: { type: Type.STRING, description: 'One of: primary, header, items, ignore' },
+                headerRowIndex: { type: Type.INTEGER, description: '0-based index of the table header row in the sampled rows.' },
+                joinKeyColumn: { type: Type.STRING, description: 'Join header name if linking header and items tabs.' },
+                columnMap: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      rawHeader: { type: Type.STRING },
+                      schemaField: { type: Type.STRING }
+                    },
+                    required: ['rawHeader', 'schemaField']
+                  }
+                },
+                defaults: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      field: { type: Type.STRING },
+                      value: { type: Type.STRING }
+                    },
+                    required: ['field', 'value']
+                  }
+                }
+              },
+              required: ['sheetName', 'role', 'headerRowIndex', 'columnMap']
             }
           }
         },
-        required: ['summary', 'records']
+        required: ['summary', 'mappings']
       };
 
-      const CANDIDATE_MODELS = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen', 'gemini-flash-latest'];
+      const buildSampleMappingPrompt = () => {
+        const sampledSheets = sheetsContent.map(s => {
+          const headRows = s.rows.slice(0, 18);
+          const extraSamples = s.rows.length > 40 ? s.rows.slice(Math.floor(s.rows.length / 2), Math.floor(s.rows.length / 2) + 3) : [];
+          return `--- Sheet "${s.name}" (${s.rows.length} total rows) ---\nFirst rows:\n${JSON.stringify(headRows)}${extraSamples.length ? `\nMid-sheet sample rows:\n${JSON.stringify(extraSamples)}` : ''}`;
+        }).join('\n\n');
 
-      const buildPromptForSheets = (sheetsPayload: Array<{ name: string; rows: any[][] }>) => {
-        const formattedSheets = sheetsPayload
-          .map(s => `--- Sheet "${s.name}" (${s.rows.length} rows) ---\n${JSON.stringify(s.rows)}`)
-          .join('\n\n');
+        return `Analyze this Excel workbook${fileName ? ` ("${fileName}")` : ''} and return ONLY a compact column mapping specification for the "${targetType}" schema.
+Allowed schemaField values: ${mappingFieldsEnum.join(', ')}
 
-        return `You are a precision data transformation engine for Poultry LMS 360.
-Transform the uploaded spreadsheet workbook${fileName ? ` ("${fileName}")` : ''} (sheets: ${workbook.SheetNames.join(', ')}) into structured JSON records strictly matching the "${targetType}" database schema.
+Workbook Samples:
+${sampledSheets}
 
-Target JSON record fields (ALL values returned cleanly):
-${targetHeaders.join(', ')}
-
-Workbook Data:
-${formattedSheets}
-
-STRICT TRANSFORMATION & INTELLIGENT MISSING-VALUE RULES:
-1. Examine EVERY worksheet and detect multi-tab relationships (e.g. separate Sales Header and Sale Items sheets linked by invoice/bill number, or single-sheet accounting reports).
-2. Ignore report title headers, blank rows, column subheaders, and summary/subtotal/"Total"/"Grand Total" footer rows.
-3. Hierarchical/grouped rows: if an accounting report prints Date, Invoice No, Customer/Supplier Name, or Flock only on the first row of a group and leaves subsequent rows blank, carry them down to every row in that group.
-4. DATES: Convert EVERY date ("SaleDate", "PurchaseDate", or "LogDate") into strict "YYYY-MM-DD" format. Assume DD-MM-YYYY / DD/MM/YYYY ordering when ambiguous (e.g. "01-04-2026" -> "2026-04-01", "15/11/2026" -> "2026-11-15").
-5. NEVER LEAVE REQUIRED FIELDS EMPTY IF THEY CAN BE INFERRED FROM CONTEXT:
-   - FOR "items":
-     * Deduplicate unique item names across the sheet when generating item master rows, OR fill every row cleanly.
-     * "Category" MUST strictly be one of: "Feed", "Medicine", "Equipment", "Sales Item", "Raw Ingredient". NEVER return empty string for Category — infer intelligently from the item name/context (e.g., Eggs/Meat/Birds -> "Sales Item", Starter/Layer/Mash -> "Feed", Vaccine/Vitamin -> "Medicine", Feeder/Tray -> "Equipment", Maize/Soya/LSP -> "Raw Ingredient").
-     * "UnitOfMeasurement" MUST NEVER be empty — infer from item name/units/rates (e.g., "Pieces", "Tray-30", "Kg", "Bag", "Bottle", "Dozen").
-     * Fill missing "UnitPrice", "SellingPrice", "CurrentStock", "MinThreshold" as "0" and "WeightPerUnit" as "1".
-   - FOR "sales":
-     * If item is eggs (e.g. "Eggs", "Fresh Eggs", "Table Eggs", "Damaged Eggs", etc.), set "ItemType" strictly to "Egg". For live birds/flocks -> "Bird". Otherwise -> "General Inventory".
-     * If "CustomerName" is absent, infer "Walk-in Customer".
-     * If "UnitPrice" is missing but Quantity & Total Amount exist, compute UnitPrice = Amount / Quantity.
-     * If "Status" is Paid/Cash or absent on a cash/retail report, set "Status" to "Paid" ("Paid", "Partial", "Unpaid") and infer "ReceivedAmount". Strip currency symbols/commas from numbers.
-   - FOR "purchases":
-     * Set "ItemType" to "Flock" for live birds/chicks/flocks, or "Inventory" otherwise. Infer "General Supplier" if supplier is missing. Compute missing UnitPrice from Amount/Quantity if present.
-   - FOR "daily-logs":
-     * Fill missing numeric metrics with "0" and extract clean YYYY-MM-DD dates.
-6. Transform ALL valid data rows from the sheets — do NOT truncate or skip valid rows.`;
+Rules:
+1. Identify the 0-based "headerRowIndex" of the real table header row in each relevant sheet (skip title/banner rows).
+2. Map each rawHeader to its matching schemaField (map line totals / net amounts / gross values to "TotalAmount" when separate from UnitPrice; map unneeded columns like S.No. to "Ignore").
+3. For multi-tab invoices split across a header sheet and a line-items sheet, mark them role="header" and role="items" with the join column header in joinKeyColumn; otherwise use role="primary".
+4. Add "defaults" ONLY if a required value (like ItemName) appears in report banner titles rather than columns.`;
       };
 
-      const callGeminiWithFailover = async (promptText: string) => {
+      const callGeminiSchemaRunner = async (promptText: string, schemaObj: any, perAttemptMs: number, totalBudgetMs = 8500) => {
+        if (!clientInfo) throw new Error('Gemini API key not configured.');
+        const deadline = Date.now() + totalBudgetMs;
         let lastErr: any = null;
         const maxKeyAttempts = Math.max(1, keyPool.getKeyCount());
         const triedKeys = new Set<string>();
 
         for (let k = 0; k < maxKeyAttempts; k++) {
+          if (Date.now() >= deadline - 800) break;
           const activeClientInfo = k === 0 ? clientInfo : keyPool.getNextClient();
           if (!activeClientInfo || triedKeys.has(activeClientInfo.keyId)) continue;
           triedKeys.add(activeClientInfo.keyId);
 
           for (let i = 0; i < CANDIDATE_MODELS.length; i++) {
+            const remaining = deadline - Date.now();
+            if (remaining <= 800) break;
+            const effectiveTimeout = Math.min(perAttemptMs, remaining);
             const model = CANDIDATE_MODELS[i];
             try {
               const genPromise = activeClientInfo.client.models.generateContent({
@@ -2438,15 +2830,15 @@ STRICT TRANSFORMATION & INTELLIGENT MISSING-VALUE RULES:
                 contents: promptText,
                 config: {
                   responseMimeType: 'application/json',
-                  responseSchema
+                  responseSchema: schemaObj
                 }
               });
               const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(`Timeout: Model ${model} exceeded 20 seconds`)), 20000)
+                setTimeout(() => reject(new Error(`Timeout: Model ${model} exceeded ${Math.round(effectiveTimeout / 1000)} seconds`)), effectiveTimeout)
               );
               const response: any = await Promise.race([genPromise, timeoutPromise]);
               const parsed = JSON.parse(response.text?.trim() || '{}');
-              if (parsed && Array.isArray(parsed.records)) {
+              if (parsed && typeof parsed === 'object') {
                 return parsed;
               }
             } catch (err: any) {
@@ -2455,47 +2847,78 @@ STRICT TRANSFORMATION & INTELLIGENT MISSING-VALUE RULES:
               const msg = (err.message || '').toLowerCase();
               if (status === 429 || msg.includes('quota') || msg.includes('resource_exhausted')) {
                 keyPool.markKeyCooldown(activeClientInfo.keyId, 15 * 60 * 1000);
-                break; // Switch immediately to next key in pool
+                break;
               }
               if (status === 400 || status === 401 || status === 403 || msg.includes('api key')) {
                 keyPool.markKeyCooldown(activeClientInfo.keyId, 15 * 60 * 1000);
-                break; // Invalid/unauthorized key -> switch immediately to next key
+                break;
               }
             }
           }
         }
-        throw lastErr || new Error('AI failed to generate structured JSON records.');
+        throw lastErr || new Error('Gemini mapping request failed.');
       };
 
       let allJsonRecords: Record<string, any>[] = [];
       let combinedSummary = '';
+      let aiFailureNote = '';
 
-      if (totalSerializedChars <= 90000) {
-        const resultJson = await callGeminiWithFailover(buildPromptForSheets(sheetsContent));
-        allJsonRecords = resultJson.records || [];
-        combinedSummary = resultJson.summary || `Processed ${sheetsContent.length} worksheet(s).`;
-      } else {
-        // Chunk large primary sheet(s) in batches of 120 rows while including smaller secondary sheets as reference
-        const largestSheet = [...sheetsContent].sort((a, b) => b.rows.length - a.rows.length)[0];
-        const headerHint = largestSheet.rows.slice(0, 5);
-        const bodyRows = largestSheet.rows.slice(5);
-        const auxSheets = sheetsContent.filter(s => s !== largestSheet && JSON.stringify(s.rows).length < 25000);
-        const CHUNK_ROWS = 120;
-        for (let start = 0; start < bodyRows.length; start += CHUNK_ROWS) {
-          const chunkSheet = {
-            name: largestSheet.name,
-            rows: [...headerHint, ...bodyRows.slice(start, start + CHUNK_ROWS)]
-          };
-          const resultJson = await callGeminiWithFailover(buildPromptForSheets([chunkSheet, ...auxSheets]));
-          if (Array.isArray(resultJson.records)) {
-            allJsonRecords.push(...resultJson.records);
+      // Tier 1: Ultra-fast sample-only Gemini schema mapping (~1-3s regardless of row count, hard-capped at 8.5s total)
+      if (clientInfo) {
+        try {
+          const mappingRes = await callGeminiSchemaRunner(buildSampleMappingPrompt(), mappingResponseSchema, 5500, 8500);
+          if (mappingRes && Array.isArray(mappingRes.mappings) && mappingRes.mappings.length > 0) {
+            const mappedRows = applySheetMappingsToRecords(sheetsContent, mappingRes.mappings, targetType, targetHeaders);
+            if (mappedRows.length > 0) {
+              allJsonRecords = mappedRows;
+              combinedSummary = mappingRes.summary || `AI mapped ${mappingRes.mappings.length} worksheet(s) and extracted ${mappedRows.length} rows.`;
+            }
           }
-          if (!combinedSummary && resultJson.summary) combinedSummary = resultJson.summary;
+        } catch (aiErr: any) {
+          aiFailureNote = aiErr?.message || 'AI schema mapping timed out';
+        }
+      }
+
+      // Tier 2: Zero-failure deterministic schema mapping fallback (covers key absent / 429 / timeout / weird column aliases)
+      if (allJsonRecords.length === 0) {
+        const detSpecs = detectDeterministicSheetMapping(sheetsContent, targetType);
+        if (detSpecs.length > 0) {
+          const detRows = applySheetMappingsToRecords(sheetsContent, detSpecs, targetType, targetHeaders);
+          if (detRows.length > 0) {
+            allJsonRecords = detRows;
+            combinedSummary = `Fast schema engine mapped ${detSpecs.length} worksheet(s) into ${detRows.length} ${targetType} records.`;
+          }
+        }
+      }
+
+      // Tier 3: Compact direct-record Gemini extraction ONLY for small non-tabular sheets (<= 60 rows) when Tier 1 + 2 found nothing
+      const totalRowCount = sheetsContent.reduce((sum, s) => sum + s.rows.length, 0);
+      if (allJsonRecords.length === 0 && clientInfo && totalRowCount <= 60) {
+        const recordProperties: Record<string, any> = {};
+        for (const h of targetHeaders) recordProperties[h] = { type: Type.STRING };
+        const directSchema = {
+          type: Type.OBJECT,
+          properties: {
+            summary: { type: Type.STRING },
+            records: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: recordProperties } }
+          },
+          required: ['summary', 'records']
+        };
+        const formattedSheets = sheetsContent
+          .map(s => `--- Sheet "${s.name}" (${s.rows.length} rows) ---\n${JSON.stringify(s.rows)}`)
+          .join('\n\n');
+        const directPrompt = `Extract structured "${targetType}" records (${targetHeaders.join(', ')}) from this spreadsheet:\n${formattedSheets}\nConvert dates to YYYY-MM-DD (DD-MM-YYYY assumed if ambiguous). Skip totals/headers.`;
+        const directRes = await callGeminiSchemaRunner(directPrompt, directSchema, 12000);
+        if (directRes && Array.isArray(directRes.records)) {
+          allJsonRecords = directRes.records;
+          combinedSummary = directRes.summary || `Extracted ${allJsonRecords.length} records directly.`;
         }
       }
 
       if (allJsonRecords.length === 0) {
-        throw new Error('No importable data rows were found in the uploaded spreadsheet.');
+        throw new Error(aiFailureNote
+          ? `Could not map tabular columns automatically (${aiFailureNote}).`
+          : 'No importable data rows were found in the uploaded spreadsheet.');
       }
 
       // Deterministic server-side post-normalization & missing-value discovery on every transformed JSON record
@@ -2508,23 +2931,109 @@ STRICT TRANSFORMATION & INTELLIGENT MISSING-VALUE RULES:
         for (const h of targetHeaders) {
           rec[h] = rawRec?.[h] !== undefined && rawRec?.[h] !== null ? String(rawRec[h]).trim() : '';
         }
+        const rawTotalAmt = cleanFloat(rawRec?.TotalAmount || 0);
+
         if (targetType === 'sales') {
           rec.SaleDate = cleanDate(rec.SaleDate) || carrySaleDate;
           if (rec.SaleDate) carrySaleDate = rec.SaleDate;
           if (!rec.CustomerName) rec.CustomerName = 'Walk-in Customer';
+
+          let qty = cleanFloat(rec.Quantity || 0);
+          let unitP = cleanFloat(rec.UnitPrice || 0);
+          if (!rec.ItemName && (qty > 0 || rawTotalAmt > 0 || unitP > 0)) {
+            rec.ItemName = 'Fresh Eggs';
+          }
+
           if (isEggItemName(rec.ItemName, rec.ItemType)) {
             rec.ItemType = 'Egg';
           } else if (!rec.ItemType) {
-            rec.ItemType = 'General Inventory';
+            const isSupply = /\b(feed|mash|crumble|pellet|starter|grower|finisher|concentrate|premix|ration|medicine|vaccine|feeder|drinker|tray)\b/i.test(rec.ItemName || '');
+            rec.ItemType = !isSupply && /\b(bird|birds|hen|hens|broiler|layer|cull|culls|flock)\b/i.test(rec.ItemName || '')
+              ? 'Bird'
+              : 'General Inventory';
           }
+
+          if (qty <= 0 && rawTotalAmt > 0 && unitP > 0) {
+            qty = Number((rawTotalAmt / unitP).toFixed(4));
+          } else if (qty <= 0 && (unitP > 0 || rawTotalAmt > 0) && rec.ItemName) {
+            qty = 1;
+          }
+          if (unitP === 0 && rawTotalAmt > 0 && qty > 0) {
+            unitP = Number((rawTotalAmt / qty).toFixed(4));
+          }
+
+          const gstPerc = cleanFloat(rec.GSTPercentage || 0);
+          const discount = cleanFloat(rec.Discount || 0);
+          const otherCharges = cleanFloat(rec.OtherCharges || 0);
+          let receivedAmt = cleanFloat(rec.ReceivedAmount || 0);
+          const estGrand = Math.max(0, (qty * unitP) * (1 + gstPerc / 100) + otherCharges - discount);
+          const explicitStatus = (rec.Status || '').toLowerCase();
+
+          if (receivedAmt === 0 && estGrand > 0 && explicitStatus !== 'unpaid' && explicitStatus !== 'credit' && explicitStatus !== 'due') {
+            if (explicitStatus === 'paid' || explicitStatus === 'cash' || (!explicitStatus && rec.ReceivedAmount === '')) {
+              receivedAmt = Number(estGrand.toFixed(2));
+            }
+          }
+          if (!rec.Status) {
+            rec.Status = receivedAmt >= estGrand - 0.01 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
+          }
+
+          rec.Quantity = String(qty);
+          rec.UnitPrice = String(unitP);
+          rec.GSTPercentage = String(gstPerc);
+          rec.Discount = String(discount);
+          rec.OtherCharges = String(otherCharges);
+          rec.ReceivedAmount = String(receivedAmt);
         } else if (targetType === 'purchases') {
           rec.PurchaseDate = cleanDate(rec.PurchaseDate) || carryPurchaseDate;
           if (rec.PurchaseDate) carryPurchaseDate = rec.PurchaseDate;
           if (!rec.SupplierName) rec.SupplierName = 'General Supplier';
-          if (!rec.ItemType) rec.ItemType = 'Inventory';
+          if (!rec.ItemType) {
+            const isSupply = /\b(feed|mash|crumble|pellet|starter|grower|finisher|concentrate|premix|ration|medicine|vaccine|feeder|drinker|tray)\b/i.test(rec.ItemName || '');
+            rec.ItemType = !isSupply && /\b(flock|chick|bird|hen|pullet|broiler|layer)\b/i.test(rec.ItemName || '') ? 'Flock' : 'Inventory';
+          }
+
+          let qty = cleanFloat(rec.Quantity || 0);
+          let unitP = cleanFloat(rec.UnitPrice || 0);
+          if (qty <= 0 && rawTotalAmt > 0 && unitP > 0) {
+            qty = Number((rawTotalAmt / unitP).toFixed(4));
+          } else if (qty <= 0 && (unitP > 0 || rawTotalAmt > 0) && rec.ItemName) {
+            qty = 1;
+          }
+          if (unitP === 0 && rawTotalAmt > 0 && qty > 0) {
+            unitP = Number((rawTotalAmt / qty).toFixed(4));
+          }
+
+          const gstPerc = cleanFloat(rec.GSTPercentage || 0);
+          let receivedAmt = cleanFloat(rec.ReceivedAmount || 0);
+          const estTotal = (qty * unitP) * (1 + gstPerc / 100);
+          const explicitStatus = (rec.Status || '').toLowerCase();
+          if (receivedAmt === 0 && estTotal > 0 && explicitStatus !== 'unpaid' && explicitStatus !== 'credit') {
+            if (explicitStatus === 'paid' || (!explicitStatus && rec.ReceivedAmount === '')) {
+              receivedAmt = Number(estTotal.toFixed(2));
+            }
+          }
+          if (!rec.Status) {
+            rec.Status = receivedAmt >= estTotal - 0.01 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
+          }
+
+          rec.Quantity = String(qty);
+          rec.UnitPrice = String(unitP);
+          rec.GSTPercentage = String(gstPerc);
+          rec.ReceivedAmount = String(receivedAmt);
         } else if (targetType === 'daily-logs') {
           rec.LogDate = cleanDate(rec.LogDate) || carryLogDate;
           if (rec.LogDate) carryLogDate = rec.LogDate;
+          rec.EggsCollected = String(cleanInt(rec.EggsCollected || 0));
+          rec.MortalityCount = String(cleanInt(rec.MortalityCount || 0));
+          rec.DamagedEggsCollected = String(cleanInt(rec.DamagedEggsCollected || 0));
+          rec.FeedConsumedKg = String(cleanFloat(rec.FeedConsumedKg || 0));
+          rec.WaterConsumed = String(cleanFloat(rec.WaterConsumed || 0));
+          rec.DailyAverageWeight = String(cleanFloat(rec.DailyAverageWeight || 0));
+          rec.BirdsEatenBySelf = String(cleanInt(rec.BirdsEatenBySelf || 0));
+          rec.BirdsEatenValue = String(cleanFloat(rec.BirdsEatenValue || 0));
+          rec.EggsGifted = String(cleanInt(rec.EggsGifted || 0));
+          rec.EggsGiftedValue = String(cleanFloat(rec.EggsGiftedValue || 0));
         } else if (targetType === 'items') {
           const unitP = cleanFloat(rec.UnitPrice || 0);
           const sellP = cleanFloat(rec.SellingPrice || 0);
@@ -2538,6 +3047,7 @@ STRICT TRANSFORMATION & INTELLIGENT MISSING-VALUE RULES:
           rec.WeightPerUnit = String(cleanFloat(rec.WeightPerUnit || 1) || 1);
           rec.MinThreshold = String(cleanFloat(rec.MinThreshold || 0));
         }
+
         return rec;
       });
 
@@ -2556,9 +3066,8 @@ STRICT TRANSFORMATION & INTELLIGENT MISSING-VALUE RULES:
         summary: `${summaryPrefix}${combinedSummary || `Transformed ${cleanedJsonRecords.length} rows across ${workbook.SheetNames.length} tab(s).`}`,
         sheetsProcessed: workbook.SheetNames
       });
-
     } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'Failed to process Excel file using Gemini AI.' });
+      return res.status(500).json({ error: err.message || 'Failed to process Excel file.' });
     }
   }
 };
