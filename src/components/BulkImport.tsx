@@ -122,6 +122,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
   const [csvText, setCsvText] = useState<string>('');
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isCommiting, setIsCommiting] = useState<boolean>(false);
+  const [commitProgress, setCommitProgress] = useState<string>('');
   const [parseResult, setParseResult] = useState<ParseResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [successMessage, setSuccessMessage] = useState<string>('');
@@ -336,33 +337,77 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
 
   const handleCommit = async () => {
     if (!parseResult) return;
-    
+
     setIsCommiting(true);
+    setCommitProgress('');
     setErrorMessage('');
     setSuccessMessage('');
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('/api/bulk-import/commit', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : '',
-          'x-user-email': localStorage.getItem('userEmail') || 'operator@farm.com',
-          'X-Farm-Id': String(farmId)
-        },
-        body: JSON.stringify({
-          type: selectedType,
-          records: parseResult.records,
-          farmId
-        })
-      });
+      const effectiveType = parseResult.type || selectedType;
+      const validRecords = parseResult.records
+        .filter(r => r.status === 'Valid')
+        .map(r => ({ status: r.status, record: r.record }));
 
-      const body = await parseJsonResponseSafely(response, 'Failed to sync data elements to core database.');
-      if (!response.ok) {
-        throw new Error(body.error || 'Failed to sync data elements to core database.');
+      if (validRecords.length === 0) {
+        setSuccessMessage('Zero valid records to import.');
+        return;
       }
 
-      setSuccessMessage(body.message);
+      // Pack valid records into invoice-safe chunks of ~200 rows so large uploads commit fast without HTTP timeouts
+      const CHUNK_TARGET = 200;
+      const chunks: Array<typeof validRecords> = [];
+      let currentChunk: typeof validRecords = [];
+      for (let i = 0; i < validRecords.length; i++) {
+        const item = validRecords[i];
+        currentChunk.push(item);
+        const curInv = String(item.record?.InvoiceNumber || '').trim().toLowerCase();
+        const nextInv = i + 1 < validRecords.length
+          ? String(validRecords[i + 1].record?.InvoiceNumber || '').trim().toLowerCase()
+          : '';
+        const invoiceBoundary = !curInv || curInv !== nextInv;
+        if (currentChunk.length >= CHUNK_TARGET && invoiceBoundary) {
+          chunks.push(currentChunk);
+          currentChunk = [];
+        }
+      }
+      if (currentChunk.length > 0) chunks.push(currentChunk);
+
+      let totalSaved = 0;
+      let totalSkipped = 0;
+
+      for (let idx = 0; idx < chunks.length; idx++) {
+        if (chunks.length > 1) {
+          setCommitProgress(`Syncing batch ${idx + 1}/${chunks.length}...`);
+        }
+        const response = await fetch('/api/bulk-import/commit', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : '',
+            'x-user-email': localStorage.getItem('userEmail') || 'operator@farm.com',
+            'X-Farm-Id': String(farmId)
+          },
+          body: JSON.stringify({
+            type: effectiveType,
+            records: chunks[idx],
+            farmId,
+            skipReconcile: idx < chunks.length - 1
+          })
+        });
+
+        const body = await parseJsonResponseSafely(response, 'Failed to sync data elements to core database.');
+        if (!response.ok) {
+          throw new Error(body.error || 'Failed to sync data elements to core database.');
+        }
+
+        totalSaved += Number(body.count || 0);
+        totalSkipped += Number(body.duplicatesSkipped || 0);
+      }
+
+      setSuccessMessage(
+        `Successfully synchronized and locked ${totalSaved} records.${totalSkipped > 0 ? ` ${totalSkipped} duplicates skipped.` : ''}`
+      );
       setParseResult(null);
       setFileName('');
       setCsvText('');
@@ -378,6 +423,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
       setErrorMessage(err.message || 'Failed saving spreadsheet data. Check database constraints.');
     } finally {
       setIsCommiting(false);
+      setCommitProgress('');
     }
   };
 
@@ -814,7 +860,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
                     }`}
                   >
                     {isCommiting ? (
-                      <>Syncing...</>
+                      <>{commitProgress || 'Syncing...'}</>
                     ) : (
                       <>
                         <ArrowRight className="h-4 w-4" />

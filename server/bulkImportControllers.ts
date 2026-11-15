@@ -1174,6 +1174,13 @@ function applySheetMappingsToRecords(
   return allRows;
 }
 
+function normalizeEntityKey(name: string | undefined | null): string {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export const bulkImportControllers = {
   // POST /api/bulk-import/parse
   async parseImportData(req: Request, res: Response) {
@@ -1280,13 +1287,33 @@ export const bulkImportControllers = {
       }
 
       inventories.forEach(inv => {
-        if (inv.ItemName) existingInvs.add(inv.ItemName.toLowerCase().trim());
+        if (inv.ItemName) existingInvs.add(normalizeEntityKey(inv.ItemName));
       });
 
+      const customerByNormName = new Map<string, any>();
+      customers.forEach(c => {
+        const k = normalizeEntityKey(c.FullName);
+        if (k && !customerByNormName.has(k)) customerByNormName.set(k, c);
+      });
+
+      const supplierByNormName = new Map<string, any>();
+      suppliers.forEach(s => {
+        const k = normalizeEntityKey(s.CompanyName);
+        if (k && !supplierByNormName.has(k)) supplierByNormName.set(k, s);
+      });
+
+      const invByNormName = new Map<string, any>();
+      inventories.forEach(inv => {
+        const k = normalizeEntityKey(inv.ItemName);
+        if (k && !invByNormName.has(k)) invByNormName.set(k, inv);
+      });
 
       let hasNonZeroEggs = false;
       let hasNonZeroMortality = false;
       const seenItemNamesInFile = new Set<string>();
+      const stagedNewCustomers = new Map<string, string>();
+      const stagedNewSuppliers = new Map<string, string>();
+      const stagedNewItems = new Map<string, string>();
       let lastSeenSaleDate = '';
       let lastSeenPurchaseDate = '';
       let lastSeenLogDate = '';
@@ -1527,12 +1554,16 @@ export const bulkImportControllers = {
             status = 'Duplicate';
             details.push(`Invoice "${invoiceNo}" already exists in Purchases. It will be skipped.`);
           } else {
-            const matchedSupplier = suppliers.find(s => (s.CompanyName || '').toLowerCase().trim() === supplierName.toLowerCase().trim());
+            const supNormKey = normalizeEntityKey(supplierName);
+            const matchedSupplier = supplierByNormName.get(supNormKey);
             if (matchedSupplier) {
               record._supplierId = matchedSupplier.Id;
-              details.push(`Matched existing Supplier: "${supplierName}"`);
+              details.push(`Matched existing Supplier: "${matchedSupplier.CompanyName}" (ID: #${matchedSupplier.Id})`);
+            } else if (stagedNewSuppliers.has(supNormKey)) {
+              details.push(`Reusing staged Supplier "${stagedNewSuppliers.get(supNormKey)}" from earlier row (no duplicate created).`);
             } else {
-              details.push(`Supplier name "${supplierName}" is new. A new supplier profile will be auto-generated.`);
+              stagedNewSuppliers.set(supNormKey, supplierName);
+              details.push(`Supplier "${supplierName}" is new. A single profile will be created on commit.`);
             }
 
             if (itemType.toLowerCase() === 'flock') {
@@ -1547,16 +1578,22 @@ export const bulkImportControllers = {
               }
             } else {
               record.ItemType = 'Inventory';
-              const matchedItem = inventories.find(inv => (inv.ItemName || '').toLowerCase().trim() === itemName.toLowerCase().trim());
+              const itemNormKey = normalizeEntityKey(itemName);
+              const matchedItem = invByNormName.get(itemNormKey);
               if (!matchedItem) {
                 const inferredCat = inferItemCategory(itemName, '', price, 0, record.Notes);
                 const inferredUom = inferUnitOfMeasurement(itemName, '', inferredCat.category, record.Notes);
                 record._autoCreateCategory = inferredCat.category;
                 record._autoCreateUom = inferredUom.uom;
-                details.push(`New warehouse item "${itemName}" (${inferredCat.category}, ${inferredUom.uom}) will be auto-registered on commit.`);
+                if (stagedNewItems.has(itemNormKey)) {
+                  details.push(`Reusing staged item "${stagedNewItems.get(itemNormKey)}" from earlier row (no duplicate created).`);
+                } else {
+                  stagedNewItems.set(itemNormKey, itemName);
+                  details.push(`New warehouse item "${itemName}" (${inferredCat.category}, ${inferredUom.uom}) will be auto-registered once on commit.`);
+                }
               } else {
                 record._inventoryId = matchedItem.Id;
-                details.push(`Matched Item: "${itemName}" (ID: ${matchedItem.Id})`);
+                details.push(`Matched Item: "${matchedItem.ItemName}" (ID: ${matchedItem.Id})`);
               }
             }
           }
@@ -1673,12 +1710,16 @@ export const bulkImportControllers = {
             status = 'Duplicate';
             details.push(`Invoice "${invoiceNo}" already exists in Sales. It will be skipped.`);
           } else {
-            const matchedCustomer = customers.find(c => (c.FullName || '').toLowerCase().trim() === customerName.toLowerCase().trim());
+            const custNormKey = normalizeEntityKey(customerName);
+            const matchedCustomer = customerByNormName.get(custNormKey);
             if (matchedCustomer) {
               record._customerId = matchedCustomer.Id;
-              details.push(`Found existing Customer: "${customerName}"`);
+              details.push(`Found existing Customer: "${matchedCustomer.FullName}" (ID: #${matchedCustomer.Id})`);
+            } else if (stagedNewCustomers.has(custNormKey)) {
+              details.push(`Reusing staged Customer "${stagedNewCustomers.get(custNormKey)}" from earlier row (no duplicate created).`);
             } else {
-              details.push(`Customer "${customerName}" is new. A profile will be auto-generated.`);
+              stagedNewCustomers.set(custNormKey, customerName);
+              details.push(`Customer "${customerName}" is new. A single profile will be created on commit.`);
             }
 
             if (resolvedItemType === 'Bird') {
@@ -1714,14 +1755,20 @@ export const bulkImportControllers = {
             } else {
               // General Inventory
               if (!exactWarehouseMatch) {
+                const itemNormKey = normalizeEntityKey(itemName);
                 const inferredCat = inferItemCategory(itemName, '', 0, price, record.Notes);
                 const inferredUom = inferUnitOfMeasurement(itemName, '', inferredCat.category, record.Notes);
                 record._autoCreateCategory = inferredCat.category;
                 record._autoCreateUom = inferredUom.uom;
-                details.push(`New warehouse item "${itemName}" (${inferredCat.category}, ${inferredUom.uom}) will be auto-registered on commit.`);
+                if (stagedNewItems.has(itemNormKey)) {
+                  details.push(`Reusing staged warehouse item "${stagedNewItems.get(itemNormKey)}" (no duplicate created).`);
+                } else {
+                  stagedNewItems.set(itemNormKey, itemName);
+                  details.push(`New warehouse item "${itemName}" (${inferredCat.category}, ${inferredUom.uom}) will be auto-registered once on commit.`);
+                }
               } else {
                 record._inventoryId = exactWarehouseMatch.Id;
-                details.push(`Matched Item: "${itemName}" (Stock ID: ${exactWarehouseMatch.Id})`);
+                details.push(`Matched Item: "${exactWarehouseMatch.ItemName}" (Stock ID: ${exactWarehouseMatch.Id})`);
               }
             }
           }
@@ -1759,6 +1806,7 @@ export const bulkImportControllers = {
   // POST /api/bulk-import/commit
   async commitImportData(req: Request, res: Response) {
     const { type, records } = req.body;
+    const skipReconcile = Boolean(req.body?.skipReconcile);
     const targetFarmId = Number(req.body.farmId || req.query.farmId || req.headers['x-farm-id']) || 1;
     try {
       if (!type || !records || !Array.isArray(records)) {
@@ -1774,43 +1822,52 @@ export const bulkImportControllers = {
       let duplicateSkipCount = 0;
 
       if (type === 'items') {
-        for (const pr of validRecords) {
-          const rec = pr.record;
-          const name = (rec.ItemName || '').trim();
-          if (!name) continue;
+        if (supabaseServer) {
+          const { data: existingInvs } = await supabaseServer
+            .from('Inventories')
+            .select('Id, ItemName')
+            .eq('FarmId', targetFarmId)
+            .limit(100000);
+          const existingKeySet = new Set<string>(
+            (existingInvs || []).map((i: any) => normalizeEntityKey(i.ItemName)).filter(Boolean)
+          );
 
-          if (supabaseServer) {
-            try {
-              const { data: exists } = await supabaseServer
-                .from('Inventories')
-                .select('Id')
-                .eq('FarmId', targetFarmId)
-                .ilike('ItemName', name)
-                .maybeSingle();
+          const toInsert: any[] = [];
+          for (const pr of validRecords) {
+            const rec = pr.record;
+            const name = (rec.ItemName || '').replace(/\s+/g, ' ').trim();
+            const key = normalizeEntityKey(name);
+            if (!key) continue;
+            if (existingKeySet.has(key)) {
+              duplicateSkipCount++;
+              continue;
+            }
+            existingKeySet.add(key);
+            toInsert.push({
+              FarmId: targetFarmId,
+              ItemName: name,
+              Category: rec.Category || 'Other',
+              UnitOfMeasurement: rec.UnitOfMeasurement || 'Pieces',
+              UnitPrice: parseFloat(rec.UnitPrice || '0'),
+              SellingPrice: parseFloat(rec.SellingPrice || '0'),
+              CurrentStock: parseFloat(rec.CurrentStock || '0'),
+              WeightPerUnit: parseFloat(rec.WeightPerUnit || '1'),
+              MinThreshold: parseFloat(rec.MinThreshold || '0'),
+              Notes: rec.Notes || ''
+            });
+          }
 
-              if (exists) {
-                duplicateSkipCount++;
-                continue;
+          const CHUNK_SIZE = 100;
+          for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
+            const chunk = toInsert.slice(i, i + CHUNK_SIZE);
+            const { error: insErr } = await supabaseServer.from('Inventories').insert(chunk);
+            if (insErr) {
+              for (const row of chunk) {
+                const { error: rowErr } = await supabaseServer.from('Inventories').insert([row]);
+                if (!rowErr) saveCount++;
               }
-
-              const { data: inserted, error: insErr } = await supabaseServer.from('Inventories').insert([{
-                FarmId: targetFarmId,
-                ItemName: name,
-                Category: rec.Category || 'Other',
-                UnitOfMeasurement: rec.UnitOfMeasurement || 'Pieces',
-                UnitPrice: parseFloat(rec.UnitPrice || '0'),
-                SellingPrice: parseFloat(rec.SellingPrice || '0'),
-                CurrentStock: parseFloat(rec.CurrentStock || '0'),
-                WeightPerUnit: parseFloat(rec.WeightPerUnit || '1'),
-                MinThreshold: parseFloat(rec.MinThreshold || '0'),
-                Notes: rec.Notes || ''
-              }]).select().single();
-
-              if (!insErr && inserted) {
-                saveCount++;
-              }
-            } catch (err: any) {
-              console.error('[BulkImport items commit error]:', err.message);
+            } else {
+              saveCount += chunk.length;
             }
           }
         }
@@ -2096,33 +2153,32 @@ export const bulkImportControllers = {
           throw new Error('Cloud database connection unavailable for purchases bulk import.');
         }
 
-        const { data: existingPurch } = await supabaseServer
-          .from('Purchases')
-          .select('InvoiceNumber')
-          .eq('FarmId', targetFarmId)
-          .limit(100000);
+        const [purchRes, supsRes, invRes] = await Promise.all([
+          supabaseServer.from('Purchases').select('InvoiceNumber').eq('FarmId', targetFarmId).limit(100000),
+          supabaseServer.from('Suppliers').select('Id, CompanyName, FarmId').or(`FarmId.eq.${targetFarmId},FarmId.is.null`).limit(10000),
+          supabaseServer.from('Inventories').select('Id, ItemName, CurrentStock, UnitPrice, FarmId').or(`FarmId.eq.${targetFarmId},FarmId.is.null`).limit(50000)
+        ]);
+
         const existingPurchSet = new Set<string>(
-          (existingPurch || []).map((p: any) => (p.InvoiceNumber || '').toLowerCase().trim()).filter(Boolean)
+          (purchRes.data || []).map((p: any) => normalizeEntityKey(p.InvoiceNumber)).filter(Boolean)
         );
 
-        const { data: existingSups } = await supabaseServer
-          .from('Suppliers')
-          .select('Id, CompanyName')
-          .eq('FarmId', targetFarmId)
-          .limit(10000);
         const supplierCache = new Map<string, number>();
-        (existingSups || []).forEach((s: any) => {
-          if (s.CompanyName) supplierCache.set(s.CompanyName.toLowerCase().trim(), Number(s.Id));
+        const supplierById = new Map<number, number>();
+        (supsRes.data || []).forEach((s: any) => {
+          const id = Number(s.Id);
+          supplierById.set(id, id);
+          const k = normalizeEntityKey(s.CompanyName);
+          if (k && !supplierCache.has(k)) supplierCache.set(k, id);
         });
 
-        const { data: existingFarmInvs } = await supabaseServer
-          .from('Inventories')
-          .select('Id, ItemName')
-          .eq('FarmId', targetFarmId)
-          .limit(50000);
-        const invByNameCache = new Map<string, number>();
-        (existingFarmInvs || []).forEach((inv: any) => {
-          if (inv.ItemName) invByNameCache.set(inv.ItemName.toLowerCase().trim(), Number(inv.Id));
+        const invByNameCache = new Map<string, { id: number; stock: number; price: number }>();
+        const invByIdCache = new Map<number, { id: number; stock: number; price: number }>();
+        (invRes.data || []).forEach((inv: any) => {
+          const entry = { id: Number(inv.Id), stock: Number(inv.CurrentStock) || 0, price: Number(inv.UnitPrice) || 0 };
+          invByIdCache.set(entry.id, entry);
+          const k = normalizeEntityKey(inv.ItemName);
+          if (k && !invByNameCache.has(k)) invByNameCache.set(k, entry);
         });
 
         // Group lines sharing a non-empty InvoiceNumber into one parent Purchase + multiple PurchaseItems
@@ -2131,7 +2187,7 @@ export const bulkImportControllers = {
         for (const pr of validRecords) {
           const rec = normalizeRecordKeys(pr.record, 'purchases');
           const invNo = (rec.InvoiceNumber || '').trim();
-          const key = invNo ? invNo.toLowerCase() : '';
+          const key = normalizeEntityKey(invNo);
           if (key && existingPurchSet.has(key)) {
             duplicateSkipCount++;
             continue;
@@ -2148,35 +2204,94 @@ export const bulkImportControllers = {
           }
         }
 
+        // Pre-create ALL unique missing Suppliers in a single batch
+        const missingSuppliersMap = new Map<string, any>();
         for (const batch of groupedBatches) {
           const first = batch.lines[0];
-          const supplierName = (first.SupplierName || '').trim() || 'General Supplier';
-          const supKey = supplierName.toLowerCase();
-          let supplierId = first._supplierId ? Number(first._supplierId) : supplierCache.get(supKey);
-
-          if (!supplierId && supplierName) {
-            const { data: newSup, error: supErr } = await supabaseServer
+          const supplierName = (first.SupplierName || '').replace(/\s+/g, ' ').trim() || 'General Supplier';
+          const supKey = normalizeEntityKey(supplierName);
+          if (supKey && !supplierCache.has(supKey) && !(first._supplierId && supplierById.has(Number(first._supplierId))) && !missingSuppliersMap.has(supKey)) {
+            missingSuppliersMap.set(supKey, {
+              FarmId: targetFarmId,
+              CompanyName: supplierName,
+              ContactPerson: '',
+              Email: '',
+              Phone: '',
+              OpeningCreditBalance: 0,
+              CurrentCreditBalance: 0,
+              Address: ''
+            });
+          }
+        }
+        if (missingSuppliersMap.size > 0) {
+          const missingSupsArr = Array.from(missingSuppliersMap.values());
+          for (let i = 0; i < missingSupsArr.length; i += 100) {
+            const { data: createdSups } = await supabaseServer
               .from('Suppliers')
-              .insert([{
+              .insert(missingSupsArr.slice(i, i + 100))
+              .select('Id, CompanyName');
+            (createdSups || []).forEach((s: any) => {
+              const sid = Number(s.Id);
+              supplierById.set(sid, sid);
+              const k = normalizeEntityKey(s.CompanyName);
+              if (k && !supplierCache.has(k)) supplierCache.set(k, sid);
+            });
+          }
+        }
+
+        // Pre-create ALL unique missing Inventory items in a single batch
+        const missingInvsMap = new Map<string, any>();
+        for (const batch of groupedBatches) {
+          for (const rec of batch.lines) {
+            const itemType = rec.ItemType === 'Flock' ? 'Flock' : 'Inventory';
+            const itemName = (rec.ItemName || '').replace(/\s+/g, ' ').trim();
+            const itemKey = normalizeEntityKey(itemName);
+            const price = cleanFloat(rec.UnitPrice || 0);
+            if (itemType === 'Inventory' && itemKey && !invByNameCache.has(itemKey) && !(rec._inventoryId && invByIdCache.has(Number(rec._inventoryId))) && !missingInvsMap.has(itemKey)) {
+              const infCat = rec._autoCreateCategory || inferItemCategory(itemName, '', price, 0, rec.Notes).category;
+              const infUom = rec._autoCreateUom || inferUnitOfMeasurement(itemName, '', infCat, rec.Notes).uom;
+              missingInvsMap.set(itemKey, {
                 FarmId: targetFarmId,
-                CompanyName: supplierName,
-                ContactPerson: '',
-                Email: '',
-                Phone: '',
-                OpeningCreditBalance: 0,
-                CurrentCreditBalance: 0,
-                Address: ''
-              }])
-              .select('Id')
-              .single();
-            if (!supErr && newSup) {
-              supplierId = Number(newSup.Id);
-              supplierCache.set(supKey, supplierId);
+                ItemName: itemName,
+                Category: infCat,
+                UnitOfMeasurement: infUom,
+                UnitPrice: price,
+                SellingPrice: 0,
+                CurrentStock: 0,
+                WeightPerUnit: 1,
+                MinThreshold: 0,
+                Notes: 'Auto-created during Bulk Purchase Import'
+              });
             }
           }
+        }
+        if (missingInvsMap.size > 0) {
+          const missingInvsArr = Array.from(missingInvsMap.values());
+          for (let i = 0; i < missingInvsArr.length; i += 100) {
+            const { data: createdInvs } = await supabaseServer
+              .from('Inventories')
+              .insert(missingInvsArr.slice(i, i + 100))
+              .select('Id, ItemName, CurrentStock, UnitPrice');
+            (createdInvs || []).forEach((inv: any) => {
+              const entry = { id: Number(inv.Id), stock: Number(inv.CurrentStock) || 0, price: Number(inv.UnitPrice) || 0 };
+              invByIdCache.set(entry.id, entry);
+              const k = normalizeEntityKey(inv.ItemName);
+              if (k && !invByNameCache.has(k)) invByNameCache.set(k, entry);
+            });
+          }
+        }
 
+        const preparedPurchHeaders: Array<{ payload: any; lines: any[] }> = [];
+        const invCostUpdates = new Map<number, { qtyAdd: number; totalCostAdd: number }>();
+
+        for (const batch of groupedBatches) {
+          const first = batch.lines[0];
           const purchaseDate = cleanDate(first.PurchaseDate);
           if (!purchaseDate || !/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) continue;
+
+          const supplierName = (first.SupplierName || '').replace(/\s+/g, ' ').trim() || 'General Supplier';
+          const supKey = normalizeEntityKey(supplierName);
+          const supplierId = supplierCache.get(supKey) || (first._supplierId ? supplierById.get(Number(first._supplierId)) : undefined) || null;
 
           let batchSubTotal = 0;
           let batchGst = 0;
@@ -2191,35 +2306,10 @@ export const bulkImportControllers = {
             batchGst += lineGst;
 
             const itemType = rec.ItemType === 'Flock' ? 'Flock' : 'Inventory';
-            const itemName = (rec.ItemName || '').trim();
-            let inventoryId: number | null = rec._inventoryId ? Number(rec._inventoryId) : null;
-            if (itemType === 'Inventory' && !inventoryId && itemName) {
-              inventoryId = invByNameCache.get(itemName.toLowerCase()) || null;
-              if (!inventoryId) {
-                const infCat = rec._autoCreateCategory || inferItemCategory(itemName, '', price, 0, rec.Notes).category;
-                const infUom = rec._autoCreateUom || inferUnitOfMeasurement(itemName, '', infCat, rec.Notes).uom;
-                const { data: createdInv } = await supabaseServer
-                  .from('Inventories')
-                  .insert([{
-                    FarmId: targetFarmId,
-                    ItemName: itemName,
-                    Category: infCat,
-                    UnitOfMeasurement: infUom,
-                    UnitPrice: price,
-                    SellingPrice: 0,
-                    CurrentStock: 0,
-                    WeightPerUnit: 1,
-                    MinThreshold: 0,
-                    Notes: 'Auto-created during Bulk Purchase Import'
-                  }])
-                  .select('Id')
-                  .maybeSingle();
-                if (createdInv?.Id) {
-                  inventoryId = Number(createdInv.Id);
-                  invByNameCache.set(itemName.toLowerCase(), inventoryId);
-                }
-              }
-            }
+            const itemName = (rec.ItemName || '').replace(/\s+/g, ' ').trim();
+            const itemKey = normalizeEntityKey(itemName);
+            const resolvedInv = invByNameCache.get(itemKey) || (rec._inventoryId ? invByIdCache.get(Number(rec._inventoryId)) : undefined);
+            const inventoryId = itemType === 'Inventory' ? (resolvedInv?.id || null) : null;
 
             preparedLines.push({
               inventoryId,
@@ -2244,11 +2334,10 @@ export const bulkImportControllers = {
             balanceAmt <= 0.01 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
           const notes = (first.Notes || '').trim();
 
-          const { data: insertedPurch, error: pErr } = await supabaseServer
-            .from('Purchases')
-            .insert([{
+          preparedPurchHeaders.push({
+            payload: {
               FarmId: targetFarmId,
-              SupplierId: supplierId || null,
+              SupplierId: supplierId,
               PurchaseDate: purchaseDate,
               TotalAmount: grandTotal,
               TotalGSTAmount: batchGst,
@@ -2258,50 +2347,94 @@ export const bulkImportControllers = {
               InvoiceNumber: batch.invoiceNo,
               Status: status,
               Notes: notes
-            }])
-            .select('Id')
-            .single();
+            },
+            lines: preparedLines
+          });
+        }
 
-          if (pErr || !insertedPurch) {
-            throw new Error(pErr?.message || 'Failed inserting Purchase record into database.');
-          }
+        const HEADER_CHUNK = 100;
+        for (let i = 0; i < preparedPurchHeaders.length; i += HEADER_CHUNK) {
+          const slice = preparedPurchHeaders.slice(i, i + HEADER_CHUNK);
+          const { data: insertedPurchs, error: pErr } = await supabaseServer
+            .from('Purchases')
+            .insert(slice.map(s => s.payload))
+            .select('Id');
 
-          const purchaseId = Number(insertedPurch.Id);
-          for (const line of preparedLines) {
-            await supabaseServer.from('PurchaseItems').insert([{
-              PurchaseId: purchaseId,
-              InventoryId: line.inventoryId,
-              ItemType: line.itemType,
-              Quantity: line.qty,
-              UnitPrice: line.price,
-              GSTPercentage: line.gstPerc,
-              GSTAmount: line.lineGst,
-              TotalPrice: line.lineTotal,
-              WeightPerUnit: 1,
-              AllocatedOverhead: 0,
-              FinalLandedAmount: line.finalLanded
-            }]);
-
-            if (line.inventoryId) {
-              const { data: origInv } = await supabaseServer
-                .from('Inventories')
-                .select('CurrentStock, UnitPrice')
-                .eq('Id', line.inventoryId)
-                .maybeSingle();
-              if (origInv) {
-                const oldStock = Number(origInv.CurrentStock) || 0;
-                const oldPrice = Number(origInv.UnitPrice) || 0;
-                const newStock = oldStock + line.qty;
-                const newUnitPrice = newStock > 0 ? ((oldStock * oldPrice) + line.finalLanded) / newStock : oldPrice;
-                await supabaseServer
-                  .from('Inventories')
-                  .update({ CurrentStock: newStock, UnitPrice: newUnitPrice })
-                  .eq('Id', line.inventoryId);
+          if (pErr || !insertedPurchs || insertedPurchs.length !== slice.length) {
+            // Safe fallback per item for this chunk
+            for (const item of slice) {
+              const { data: oneP } = await supabaseServer.from('Purchases').insert([item.payload]).select('Id').single();
+              if (!oneP) continue;
+              const pid = Number(oneP.Id);
+              await supabaseServer.from('PurchaseItems').insert(
+                item.lines.map(l => ({
+                  PurchaseId: pid,
+                  InventoryId: l.inventoryId,
+                  ItemType: l.itemType,
+                  Quantity: l.qty,
+                  UnitPrice: l.price,
+                  GSTPercentage: l.gstPerc,
+                  GSTAmount: l.lineGst,
+                  TotalPrice: l.lineTotal,
+                  WeightPerUnit: 1,
+                  AllocatedOverhead: 0,
+                  FinalLandedAmount: l.finalLanded
+                }))
+              );
+              for (const l of item.lines) {
+                if (l.inventoryId) {
+                  const prev = invCostUpdates.get(l.inventoryId) || { qtyAdd: 0, totalCostAdd: 0 };
+                  prev.qtyAdd += l.qty;
+                  prev.totalCostAdd += l.finalLanded;
+                  invCostUpdates.set(l.inventoryId, prev);
+                }
               }
+              saveCount += item.lines.length;
+            }
+          } else {
+            const itemsToInsert: any[] = [];
+            slice.forEach((item, idx) => {
+              const pid = Number(insertedPurchs[idx].Id);
+              for (const l of item.lines) {
+                itemsToInsert.push({
+                  PurchaseId: pid,
+                  InventoryId: l.inventoryId,
+                  ItemType: l.itemType,
+                  Quantity: l.qty,
+                  UnitPrice: l.price,
+                  GSTPercentage: l.gstPerc,
+                  GSTAmount: l.lineGst,
+                  TotalPrice: l.lineTotal,
+                  WeightPerUnit: 1,
+                  AllocatedOverhead: 0,
+                  FinalLandedAmount: l.finalLanded
+                });
+                if (l.inventoryId) {
+                  const prev = invCostUpdates.get(l.inventoryId) || { qtyAdd: 0, totalCostAdd: 0 };
+                  prev.qtyAdd += l.qty;
+                  prev.totalCostAdd += l.finalLanded;
+                  invCostUpdates.set(l.inventoryId, prev);
+                }
+              }
+              saveCount += item.lines.length;
+            });
+            for (let j = 0; j < itemsToInsert.length; j += 200) {
+              await supabaseServer.from('PurchaseItems').insert(itemsToInsert.slice(j, j + 200));
             }
           }
+        }
 
-          saveCount += batch.lines.length;
+        // Flush consolidated Inventory stock/price updates once per InventoryId
+        const invUpdateEntries = Array.from(invCostUpdates.entries());
+        for (let i = 0; i < invUpdateEntries.length; i += 20) {
+          await Promise.all(
+            invUpdateEntries.slice(i, i + 20).map(async ([invId, delta]) => {
+              const cur = invByIdCache.get(invId) || { id: invId, stock: 0, price: 0 };
+              const newStock = cur.stock + delta.qtyAdd;
+              const newUnitPrice = newStock > 0 ? ((cur.stock * cur.price) + delta.totalCostAdd) / newStock : cur.price;
+              await supabaseServer.from('Inventories').update({ CurrentStock: newStock, UnitPrice: newUnitPrice }).eq('Id', invId);
+            })
+          );
         }
 
       } else if (type === 'sales') {
@@ -2309,56 +2442,50 @@ export const bulkImportControllers = {
           throw new Error('Cloud database connection unavailable for sales bulk import.');
         }
 
-        const { data: existingSales } = await supabaseServer
-          .from('Sales')
-          .select('InvoiceNumber')
-          .eq('FarmId', targetFarmId)
-          .limit(100000);
+        // Pre-fetch ALL reference tables for this farm in ONE parallel round-trip
+        const [salesRes, custsRes, eggsRes, catsRes, invsRes, flocksRes] = await Promise.all([
+          supabaseServer.from('Sales').select('InvoiceNumber').eq('FarmId', targetFarmId).limit(100000),
+          supabaseServer.from('Customers').select('Id, FullName, CurrentCreditBalance, FarmId').or(`FarmId.eq.${targetFarmId},FarmId.is.null`).limit(10000),
+          supabaseServer.from('EggInventories').select('Id, GradeOrType, Quantity, FarmId').or(`FarmId.eq.${targetFarmId},FarmId.is.null`).limit(100),
+          supabaseServer.from('TransactionCategories').select('Id, Name').or(`FarmId.eq.${targetFarmId},FarmId.is.null`).limit(200),
+          supabaseServer.from('Inventories').select('Id, ItemName, CurrentStock, FarmId').or(`FarmId.eq.${targetFarmId},FarmId.is.null`).limit(50000),
+          supabaseServer.from('Flocks').select('Id, CurrentCount, Status').eq('FarmId', targetFarmId).limit(10000)
+        ]);
+
         const existingSalesSet = new Set<string>(
-          (existingSales || []).map((s: any) => (s.InvoiceNumber || '').toLowerCase().trim()).filter(Boolean)
+          (salesRes.data || []).map((s: any) => normalizeEntityKey(s.InvoiceNumber)).filter(Boolean)
         );
 
-        const { data: existingCusts } = await supabaseServer
-          .from('Customers')
-          .select('Id, FullName, CurrentCreditBalance')
-          .eq('FarmId', targetFarmId)
-          .limit(10000);
         const customerCache = new Map<string, { id: number; credit: number }>();
-        (existingCusts || []).forEach((c: any) => {
-          if (c.FullName) {
-            customerCache.set(c.FullName.toLowerCase().trim(), {
-              id: Number(c.Id),
-              credit: Number(c.CurrentCreditBalance) || 0
-            });
+        const customerById = new Map<number, { id: number; credit: number }>();
+        (custsRes.data || []).forEach((c: any) => {
+          const entry = {
+            id: Number(c.Id),
+            credit: Number(c.CurrentCreditBalance) || 0
+          };
+          customerById.set(entry.id, entry);
+          const k = normalizeEntityKey(c.FullName);
+          if (k && !customerCache.has(k)) {
+            customerCache.set(k, entry);
           }
         });
 
-        const { data: farmEggs } = await supabaseServer
-          .from('EggInventories')
-          .select('Id, GradeOrType, Quantity')
-          .eq('FarmId', targetFarmId)
-          .limit(100);
         const eggInventoryMap = new Map<number, { id: number; grade: string; qty: number }>();
         const eggByGrade = new Map<string, number>();
-        (farmEggs || []).forEach((e: any) => {
+        (eggsRes.data || []).forEach((e: any) => {
           const eid = Number(e.Id);
           eggInventoryMap.set(eid, { id: eid, grade: e.GradeOrType || 'Fresh Eggs', qty: Number(e.Quantity) || 0 });
-          if (e.GradeOrType) eggByGrade.set(e.GradeOrType.toLowerCase().trim(), eid);
+          if (e.GradeOrType) eggByGrade.set(normalizeEntityKey(e.GradeOrType), eid);
         });
 
-        // Resolve or create TransactionCategories for FinancialTransactions
-        const { data: existingCats } = await supabaseServer
-          .from('TransactionCategories')
-          .select('Id, Name')
-          .or(`FarmId.eq.${targetFarmId},FarmId.is.null`)
-          .limit(200);
         const catMap = new Map<string, number>();
-        (existingCats || []).forEach((c: any) => {
-          if (c.Name) catMap.set(c.Name.toLowerCase().trim(), Number(c.Id));
+        (catsRes.data || []).forEach((c: any) => {
+          if (c.Name) catMap.set(normalizeEntityKey(c.Name), Number(c.Id));
         });
 
         const ensureCategoryId = async (catName: string): Promise<number | null> => {
-          const existingId = catMap.get(catName.toLowerCase());
+          const key = normalizeEntityKey(catName);
+          const existingId = catMap.get(key);
           if (existingId) return existingId;
           const { data: createdCat } = await supabaseServer
             .from('TransactionCategories')
@@ -2366,21 +2493,25 @@ export const bulkImportControllers = {
             .select('Id')
             .maybeSingle();
           if (createdCat?.Id) {
-            catMap.set(catName.toLowerCase(), Number(createdCat.Id));
+            catMap.set(key, Number(createdCat.Id));
             return Number(createdCat.Id);
           }
           const firstAny = catMap.values().next().value;
           return firstAny || null;
         };
 
-        const { data: existingSaleFarmInvs } = await supabaseServer
-          .from('Inventories')
-          .select('Id, ItemName')
-          .eq('FarmId', targetFarmId)
-          .limit(50000);
-        const saleInvByNameCache = new Map<string, number>();
-        (existingSaleFarmInvs || []).forEach((inv: any) => {
-          if (inv.ItemName) saleInvByNameCache.set(inv.ItemName.toLowerCase().trim(), Number(inv.Id));
+        const saleInvByNameCache = new Map<string, { id: number; stock: number }>();
+        const saleInvByIdCache = new Map<number, { id: number; stock: number }>();
+        (invsRes.data || []).forEach((inv: any) => {
+          const entry = { id: Number(inv.Id), stock: Number(inv.CurrentStock) || 0 };
+          saleInvByIdCache.set(entry.id, entry);
+          const k = normalizeEntityKey(inv.ItemName);
+          if (k && !saleInvByNameCache.has(k)) saleInvByNameCache.set(k, entry);
+        });
+
+        const flockById = new Map<number, { count: number; status: string }>();
+        (flocksRes.data || []).forEach((f: any) => {
+          flockById.set(Number(f.Id), { count: Number(f.CurrentCount) || 0, status: f.Status || 'Active' });
         });
 
         // Group lines sharing a non-empty InvoiceNumber into one parent Sales invoice + multiple SaleItems
@@ -2389,7 +2520,7 @@ export const bulkImportControllers = {
         for (const pr of validRecords) {
           const rec = normalizeRecordKeys(pr.record, 'sales');
           const invNo = (rec.InvoiceNumber || '').trim();
-          const key = invNo ? invNo.toLowerCase() : '';
+          const key = normalizeEntityKey(invNo);
           if (key && existingSalesSet.has(key)) {
             duplicateSkipCount++;
             continue;
@@ -2406,36 +2537,144 @@ export const bulkImportControllers = {
           }
         }
 
+        // 1. Pre-create ALL unique missing Customers in one batch (never repeats existing or same-file names)
+        const missingCustomersMap = new Map<string, any>();
         for (const batch of groupedSales) {
           const first = batch.lines[0];
-          const customerName = (first.CustomerName || '').trim() || 'Walk-in Customer';
-          const custKey = customerName.toLowerCase();
-          let custEntry = customerCache.get(custKey);
-
-          if (!custEntry && first._customerId) {
-            custEntry = { id: Number(first._customerId), credit: 0 };
+          const customerName = (first.CustomerName || '').replace(/\s+/g, ' ').trim() || 'Walk-in Customer';
+          const custKey = normalizeEntityKey(customerName);
+          const existingMatch = customerCache.get(custKey) || (first._customerId ? customerById.get(Number(first._customerId)) : undefined);
+          if (!existingMatch && custKey && !missingCustomersMap.has(custKey)) {
+            missingCustomersMap.set(custKey, {
+              FarmId: targetFarmId,
+              FullName: customerName,
+              Email: '',
+              Phone: '',
+              Company: '',
+              OpeningCreditBalance: 0,
+              CurrentCreditBalance: 0,
+              Address: ''
+            });
           }
-          if (!custEntry && customerName) {
-            const { data: newCust, error: custErr } = await supabaseServer
+        }
+        if (missingCustomersMap.size > 0) {
+          const missingCustsArr = Array.from(missingCustomersMap.values());
+          for (let i = 0; i < missingCustsArr.length; i += 100) {
+            const { data: createdCusts, error: custErr } = await supabaseServer
               .from('Customers')
-              .insert([{
-                FarmId: targetFarmId,
-                FullName: customerName,
-                Email: '',
-                Phone: '',
-                Company: '',
-                OpeningCreditBalance: 0,
-                CurrentCreditBalance: 0,
-                Address: ''
-              }])
-              .select('Id')
-              .single();
-            if (custErr || !newCust) {
-              throw new Error(custErr?.message || `Failed creating customer "${customerName}"`);
+              .insert(missingCustsArr.slice(i, i + 100))
+              .select('Id, FullName, CurrentCreditBalance');
+            if (custErr) {
+              throw new Error(custErr.message || 'Failed creating missing customer profiles.');
             }
-            custEntry = { id: Number(newCust.Id), credit: 0 };
-            customerCache.set(custKey, custEntry);
+            (createdCusts || []).forEach((c: any) => {
+              const entry = { id: Number(c.Id), credit: Number(c.CurrentCreditBalance) || 0 };
+              customerById.set(entry.id, entry);
+              const k = normalizeEntityKey(c.FullName);
+              if (k && !customerCache.has(k)) customerCache.set(k, entry);
+            });
           }
+        }
+
+        // 2. Pre-create any missing EggInventories & General Inventory items in one batch each
+        const missingEggsMap = new Map<string, any>();
+        const missingSaleInvsMap = new Map<string, any>();
+        for (const batch of groupedSales) {
+          for (const rec of batch.lines) {
+            const itemName = (rec.ItemName || '').replace(/\s+/g, ' ').trim();
+            const itemType: 'Bird' | 'Egg' | 'General Inventory' =
+              rec.ItemType === 'Bird' ? 'Bird' :
+              (rec.ItemType === 'Egg' || isEggItemName(itemName, rec.ItemType)) ? 'Egg' :
+              'General Inventory';
+            const price = cleanFloat(rec.UnitPrice || 0);
+
+            if (itemType === 'Egg' && !rec._eggInventoryId) {
+              const targetGrade = /\b(damaged|waste|broken|cracked)\b/i.test(itemName)
+                ? 'Damaged/Waste Eggs'
+                : (rec._eggGradeOrType || 'Fresh Eggs');
+              const gradeKey = normalizeEntityKey(targetGrade);
+              if (!eggByGrade.has(gradeKey) && !eggByGrade.has('fresh eggs') && !missingEggsMap.has(gradeKey)) {
+                missingEggsMap.set(gradeKey, {
+                  FarmId: targetFarmId,
+                  GradeOrType: targetGrade,
+                  PackSize: 'Single',
+                  Quantity: 0,
+                  UnitPrice: price,
+                  SellingPrice: price
+                });
+              }
+            } else if (itemType === 'General Inventory' && itemName) {
+              const itemKey = normalizeEntityKey(itemName);
+              if (!saleInvByNameCache.has(itemKey) && !(rec._inventoryId && saleInvByIdCache.has(Number(rec._inventoryId))) && !missingSaleInvsMap.has(itemKey)) {
+                const infCat = rec._autoCreateCategory || inferItemCategory(itemName, '', 0, price, rec.Notes).category;
+                const infUom = rec._autoCreateUom || inferUnitOfMeasurement(itemName, '', infCat, rec.Notes).uom;
+                missingSaleInvsMap.set(itemKey, {
+                  FarmId: targetFarmId,
+                  ItemName: itemName,
+                  Category: infCat,
+                  UnitOfMeasurement: infUom,
+                  UnitPrice: 0,
+                  SellingPrice: price,
+                  CurrentStock: 0,
+                  WeightPerUnit: 1,
+                  MinThreshold: 0,
+                  Notes: 'Auto-created during Bulk Sales Import'
+                });
+              }
+            }
+          }
+        }
+        if (missingEggsMap.size > 0) {
+          const { data: createdEggs } = await supabaseServer
+            .from('EggInventories')
+            .insert(Array.from(missingEggsMap.values()))
+            .select('Id, GradeOrType, Quantity');
+          (createdEggs || []).forEach((e: any) => {
+            const eid = Number(e.Id);
+            eggInventoryMap.set(eid, { id: eid, grade: e.GradeOrType, qty: Number(e.Quantity) || 0 });
+            if (e.GradeOrType) eggByGrade.set(normalizeEntityKey(e.GradeOrType), eid);
+          });
+        }
+        if (missingSaleInvsMap.size > 0) {
+          const missingArr = Array.from(missingSaleInvsMap.values());
+          for (let i = 0; i < missingArr.length; i += 100) {
+            const { data: createdInvs } = await supabaseServer
+              .from('Inventories')
+              .insert(missingArr.slice(i, i + 100))
+              .select('Id, ItemName, CurrentStock');
+            (createdInvs || []).forEach((inv: any) => {
+              const entry = { id: Number(inv.Id), stock: Number(inv.CurrentStock) || 0 };
+              saleInvByIdCache.set(entry.id, entry);
+              const k = normalizeEntityKey(inv.ItemName);
+              if (k && !saleInvByNameCache.has(k)) saleInvByNameCache.set(k, entry);
+            });
+          }
+        }
+
+        // Ensure financial transaction categories once up-front
+        const hasBirds = groupedSales.some(b => b.lines.some(l => l.ItemType === 'Bird'));
+        const hasNonBirds = groupedSales.some(b => b.lines.some(l => l.ItemType !== 'Bird'));
+        const birdSalesCatId = hasBirds ? await ensureCategoryId('Bird Sales') : null;
+        const eggSalesCatId = hasNonBirds ? await ensureCategoryId('Egg Sales') : null;
+
+        // 3. Prepare ALL Sales headers + child SaleItems + FinancialTransactions cleanly in memory
+        const preparedSales: Array<{
+          salePayload: any;
+          preparedItems: any[];
+          custEntry: { id: number; credit: number };
+          balanceAmt: number;
+          finCatId: number | null;
+          finAmount: number;
+          saleDate: string;
+          invoiceNo: string;
+          lineCount: number;
+        }> = [];
+
+        for (const batch of groupedSales) {
+          const first = batch.lines[0];
+          const customerName = (first.CustomerName || '').replace(/\s+/g, ' ').trim() || 'Walk-in Customer';
+          const custKey = normalizeEntityKey(customerName);
+          const custEntry = customerCache.get(custKey) || (first._customerId ? customerById.get(Number(first._customerId)) : undefined);
           if (!custEntry) continue;
 
           const saleDate = cleanDate(first.SaleDate);
@@ -2445,10 +2684,10 @@ export const bulkImportControllers = {
           let totalGst = 0;
           const discount = cleanFloat(first.Discount || 0);
           const otherCharges = cleanFloat(first.OtherCharges || 0);
-
           const preparedItems: any[] = [];
+
           for (const rec of batch.lines) {
-            const itemName = (rec.ItemName || '').trim();
+            const itemName = (rec.ItemName || '').replace(/\s+/g, ' ').trim();
             const itemType: 'Bird' | 'Egg' | 'General Inventory' =
               rec.ItemType === 'Bird' ? 'Bird' :
               (rec.ItemType === 'Egg' || isEggItemName(itemName, rec.ItemType)) ? 'Egg' :
@@ -2467,56 +2706,12 @@ export const bulkImportControllers = {
               const targetGrade = /\b(damaged|waste|broken|cracked)\b/i.test(itemName)
                 ? 'Damaged/Waste Eggs'
                 : (rec._eggGradeOrType || 'Fresh Eggs');
-              let foundId = eggByGrade.get(targetGrade.toLowerCase()) || eggByGrade.get('fresh eggs');
-              if (!foundId) {
-                const { data: createdEgg } = await supabaseServer
-                  .from('EggInventories')
-                  .insert([{
-                    FarmId: targetFarmId,
-                    GradeOrType: targetGrade,
-                    PackSize: 'Single',
-                    Quantity: 0,
-                    UnitPrice: price,
-                    SellingPrice: price
-                  }])
-                  .select('Id')
-                  .maybeSingle();
-                if (createdEgg?.Id) {
-                  foundId = Number(createdEgg.Id);
-                  eggInventoryMap.set(foundId, { id: foundId, grade: targetGrade, qty: 0 });
-                  eggByGrade.set(targetGrade.toLowerCase(), foundId);
-                }
-              }
-              eggInventoryId = foundId || null;
+              eggInventoryId = eggByGrade.get(normalizeEntityKey(targetGrade)) || eggByGrade.get('fresh eggs') || null;
             }
 
             let inventoryId: number | null = rec._inventoryId ? Number(rec._inventoryId) : null;
             if (itemType === 'General Inventory' && !inventoryId && itemName) {
-              inventoryId = saleInvByNameCache.get(itemName.toLowerCase()) || null;
-              if (!inventoryId) {
-                const infCat = rec._autoCreateCategory || inferItemCategory(itemName, '', 0, price, rec.Notes).category;
-                const infUom = rec._autoCreateUom || inferUnitOfMeasurement(itemName, '', infCat, rec.Notes).uom;
-                const { data: createdInv } = await supabaseServer
-                  .from('Inventories')
-                  .insert([{
-                    FarmId: targetFarmId,
-                    ItemName: itemName,
-                    Category: infCat,
-                    UnitOfMeasurement: infUom,
-                    UnitPrice: 0,
-                    SellingPrice: price,
-                    CurrentStock: 0,
-                    WeightPerUnit: 1,
-                    MinThreshold: 0,
-                    Notes: 'Auto-created during Bulk Sales Import'
-                  }])
-                  .select('Id')
-                  .maybeSingle();
-                if (createdInv?.Id) {
-                  inventoryId = Number(createdInv.Id);
-                  saleInvByNameCache.set(itemName.toLowerCase(), inventoryId);
-                }
-              }
+              inventoryId = saleInvByNameCache.get(normalizeEntityKey(itemName))?.id || null;
             }
 
             preparedItems.push({
@@ -2534,7 +2729,6 @@ export const bulkImportControllers = {
 
           const grandTotal = Math.max(0, subTotal + totalGst + otherCharges - discount);
           const explicitStatus = (first.Status || '').trim().toLowerCase();
-          // Sum line ReceivedAmount if present per line, else use header ReceivedAmount
           let receivedAmt = batch.lines.reduce((acc, l) => acc + cleanFloat(l.ReceivedAmount || 0), 0);
           if (receivedAmt === 0 && (explicitStatus === 'paid' || (!explicitStatus && first.ReceivedAmount === undefined))) {
             receivedAmt = explicitStatus === 'unpaid' ? 0 : grandTotal;
@@ -2543,11 +2737,10 @@ export const bulkImportControllers = {
           const status: 'Paid' | 'Partial' | 'Unpaid' =
             balanceAmt <= 0.01 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
           const notes = (first.Notes || '').trim();
+          const hasBirdLine = preparedItems.some(i => i.itemType === 'Bird');
 
-          // 1. Insert parent Sales record in Supabase
-          const { data: insertedSale, error: sErr } = await supabaseServer
-            .from('Sales')
-            .insert([{
+          preparedSales.push({
+            salePayload: {
               FarmId: targetFarmId,
               CustomerId: custEntry.id,
               SaleDate: saleDate,
@@ -2560,114 +2753,210 @@ export const bulkImportControllers = {
               InvoiceNumber: batch.invoiceNo,
               Status: status,
               Notes: notes
-            }])
-            .select('Id')
-            .single();
+            },
+            preparedItems,
+            custEntry,
+            balanceAmt,
+            finCatId: hasBirdLine ? (birdSalesCatId || eggSalesCatId) : (eggSalesCatId || birdSalesCatId),
+            finAmount: receivedAmt || grandTotal,
+            saleDate,
+            invoiceNo: batch.invoiceNo,
+            lineCount: batch.lines.length
+          });
+        }
 
-          if (sErr || !insertedSale) {
-            throw new Error(sErr?.message || 'Failed saving Sale record to database.');
-          }
-          const saleId = Number(insertedSale.Id);
+        // Aggregated stock & customer credit deltas across the whole batch
+        const eggDeductions = new Map<number, number>();
+        const flockDeductions = new Map<number, number>();
+        const invDeductions = new Map<number, number>();
+        const custCreditAdditions = new Map<number, number>();
 
-          // 2. Insert child SaleItems & deduct stock
-          for (const item of preparedItems) {
-            await supabaseServer.from('SaleItems').insert([{
-              SaleId: saleId,
-              ItemType: item.itemType,
-              FlockId: item.flockId,
-              EggInventoryId: item.eggInventoryId,
-              InventoryId: item.inventoryId,
-              Quantity: item.qty,
-              UnitPrice: item.price,
-              GSTPercentage: item.gstPerc,
-              GSTAmount: item.lineGst,
-              TotalPrice: item.lineSub + item.lineGst
-            }]);
-
+        const recordDeltasForSale = (entry: typeof preparedSales[number]) => {
+          for (const item of entry.preparedItems) {
             if (item.itemType === 'Egg' && item.eggInventoryId) {
-              const cachedEgg = eggInventoryMap.get(item.eggInventoryId);
-              if (cachedEgg) {
-                cachedEgg.qty = Math.max(0, cachedEgg.qty - item.qty);
-                await supabaseServer
-                  .from('EggInventories')
-                  .update({ Quantity: Math.round(cachedEgg.qty) })
-                  .eq('Id', item.eggInventoryId);
-              }
+              eggDeductions.set(item.eggInventoryId, (eggDeductions.get(item.eggInventoryId) || 0) + item.qty);
             } else if (item.itemType === 'Bird' && item.flockId) {
-              const { data: flk } = await supabaseServer
-                .from('Flocks')
-                .select('CurrentCount, Status')
-                .eq('Id', item.flockId)
-                .maybeSingle();
-              if (flk) {
-                const newBirdCount = Math.max(0, (Number(flk.CurrentCount) || 0) - item.qty);
-                const flockStatus = newBirdCount === 0 ? 'Sold' : flk.Status;
-                await supabaseServer
-                  .from('Flocks')
-                  .update({ CurrentCount: Math.round(newBirdCount), Status: flockStatus })
-                  .eq('Id', item.flockId);
-              }
+              flockDeductions.set(item.flockId, (flockDeductions.get(item.flockId) || 0) + item.qty);
             } else if (item.inventoryId) {
-              const { data: invRow } = await supabaseServer
-                .from('Inventories')
-                .select('CurrentStock')
-                .eq('Id', item.inventoryId)
-                .maybeSingle();
-              if (invRow) {
-                const newStock = Math.max(0, (Number(invRow.CurrentStock) || 0) - item.qty);
-                await supabaseServer
-                  .from('Inventories')
-                  .update({ CurrentStock: newStock })
-                  .eq('Id', item.inventoryId);
-              }
+              invDeductions.set(item.inventoryId, (invDeductions.get(item.inventoryId) || 0) + item.qty);
             }
           }
-
-          // 3. Update customer credit balance if unpaid balance remains
-          if (balanceAmt > 0.01) {
-            custEntry.credit += balanceAmt;
-            await supabaseServer
-              .from('Customers')
-              .update({ CurrentCreditBalance: custEntry.credit })
-              .eq('Id', custEntry.id);
+          if (entry.balanceAmt > 0.01) {
+            custCreditAdditions.set(
+              entry.custEntry.id,
+              (custCreditAdditions.get(entry.custEntry.id) || 0) + entry.balanceAmt
+            );
           }
+        };
 
-          // 4. Financial Transaction ledger parity
-          const catName = preparedItems.some(i => i.itemType === 'Bird') ? 'Bird Sales' : 'Egg Sales';
-          const financialCatId = await ensureCategoryId(catName);
-          if (financialCatId && (receivedAmt > 0 || grandTotal > 0)) {
-            await supabaseServer.from('FinancialTransactions').insert([{
-              FarmId: targetFarmId,
-              CategoryId: financialCatId,
-              Date: saleDate,
-              Amount: receivedAmt || grandTotal,
-              Notes: `Bulk Upload Sale - Invoice: ${batch.invoiceNo || saleId}`,
-              Type: 'Income',
-              CustomerId: custEntry.id,
-              Reference: batch.invoiceNo || String(saleId)
-            }]);
+        // 4. Bulk insert Sales headers in chunks of 100, then bulk insert SaleItems & FinancialTransactions in chunks of 200
+        const SALES_HEADER_CHUNK = 100;
+        for (let i = 0; i < preparedSales.length; i += SALES_HEADER_CHUNK) {
+          const slice = preparedSales.slice(i, i + SALES_HEADER_CHUNK);
+          const { data: insertedSales, error: sErr } = await supabaseServer
+            .from('Sales')
+            .insert(slice.map(s => s.salePayload))
+            .select('Id');
+
+          if (sErr || !insertedSales || insertedSales.length !== slice.length) {
+            // Safe row-by-row fallback for this chunk only
+            for (const entry of slice) {
+              const { data: oneSale, error: oneErr } = await supabaseServer
+                .from('Sales')
+                .insert([entry.salePayload])
+                .select('Id')
+                .single();
+              if (oneErr || !oneSale) {
+                throw new Error(oneErr?.message || sErr?.message || 'Failed saving Sale record to database.');
+              }
+              const saleId = Number(oneSale.Id);
+              await supabaseServer.from('SaleItems').insert(
+                entry.preparedItems.map(item => ({
+                  SaleId: saleId,
+                  ItemType: item.itemType,
+                  FlockId: item.flockId,
+                  EggInventoryId: item.eggInventoryId,
+                  InventoryId: item.inventoryId,
+                  Quantity: item.qty,
+                  UnitPrice: item.price,
+                  GSTPercentage: item.gstPerc,
+                  GSTAmount: item.lineGst,
+                  TotalPrice: item.lineSub + item.lineGst
+                }))
+              );
+              if (entry.finCatId && entry.finAmount > 0) {
+                await supabaseServer.from('FinancialTransactions').insert([{
+                  FarmId: targetFarmId,
+                  CategoryId: entry.finCatId,
+                  Date: entry.saleDate,
+                  Amount: entry.finAmount,
+                  Notes: `Bulk Upload Sale - Invoice: ${entry.invoiceNo || saleId}`,
+                  Type: 'Income',
+                  CustomerId: entry.custEntry.id,
+                  Reference: entry.invoiceNo || String(saleId)
+                }]);
+              }
+              recordDeltasForSale(entry);
+              saveCount += entry.lineCount;
+            }
+          } else {
+            const saleItemsBatch: any[] = [];
+            const finTxBatch: any[] = [];
+
+            slice.forEach((entry, idx) => {
+              const saleId = Number(insertedSales[idx].Id);
+              for (const item of entry.preparedItems) {
+                saleItemsBatch.push({
+                  SaleId: saleId,
+                  ItemType: item.itemType,
+                  FlockId: item.flockId,
+                  EggInventoryId: item.eggInventoryId,
+                  InventoryId: item.inventoryId,
+                  Quantity: item.qty,
+                  UnitPrice: item.price,
+                  GSTPercentage: item.gstPerc,
+                  GSTAmount: item.lineGst,
+                  TotalPrice: item.lineSub + item.lineGst
+                });
+              }
+              if (entry.finCatId && entry.finAmount > 0) {
+                finTxBatch.push({
+                  FarmId: targetFarmId,
+                  CategoryId: entry.finCatId,
+                  Date: entry.saleDate,
+                  Amount: entry.finAmount,
+                  Notes: `Bulk Upload Sale - Invoice: ${entry.invoiceNo || saleId}`,
+                  Type: 'Income',
+                  CustomerId: entry.custEntry.id,
+                  Reference: entry.invoiceNo || String(saleId)
+                });
+              }
+              recordDeltasForSale(entry);
+              saveCount += entry.lineCount;
+            });
+
+            const CHILD_CHUNK = 200;
+            for (let j = 0; j < saleItemsBatch.length; j += CHILD_CHUNK) {
+              await supabaseServer.from('SaleItems').insert(saleItemsBatch.slice(j, j + CHILD_CHUNK));
+            }
+            for (let j = 0; j < finTxBatch.length; j += CHILD_CHUNK) {
+              await supabaseServer.from('FinancialTransactions').insert(finTxBatch.slice(j, j + CHILD_CHUNK));
+            }
           }
+        }
 
-          saveCount += batch.lines.length;
+        // 5. Flush consolidated updates in parallel batches (1 update per affected entity instead of N per row)
+        const pendingUpdates: Array<() => Promise<any>> = [];
+
+        eggDeductions.forEach((qtyUsed, eggId) => {
+          const cur = eggInventoryMap.get(eggId);
+          if (cur) {
+            const nextQty = Math.max(0, Math.round(cur.qty - qtyUsed));
+            cur.qty = nextQty;
+            pendingUpdates.push(async () =>
+              await supabaseServer!.from('EggInventories').update({ Quantity: nextQty }).eq('Id', eggId)
+            );
+          }
+        });
+
+        flockDeductions.forEach((qtyUsed, flockId) => {
+          const cur = flockById.get(flockId);
+          if (cur) {
+            const nextCount = Math.max(0, Math.round(cur.count - qtyUsed));
+            const nextStatus = nextCount === 0 ? 'Sold' : cur.status;
+            pendingUpdates.push(async () =>
+              await supabaseServer!.from('Flocks').update({ CurrentCount: nextCount, Status: nextStatus }).eq('Id', flockId)
+            );
+          }
+        });
+
+        invDeductions.forEach((qtyUsed, invId) => {
+          const cur = saleInvByIdCache.get(invId);
+          if (cur) {
+            const nextStock = Math.max(0, cur.stock - qtyUsed);
+            pendingUpdates.push(async () =>
+              await supabaseServer!.from('Inventories').update({ CurrentStock: nextStock }).eq('Id', invId)
+            );
+          }
+        });
+
+        custCreditAdditions.forEach((addedCredit, custId) => {
+          const cur = customerById.get(custId);
+          if (cur) {
+            cur.credit += addedCredit;
+            pendingUpdates.push(async () =>
+              await supabaseServer!.from('Customers').update({ CurrentCreditBalance: cur.credit }).eq('Id', custId)
+            );
+          }
+        });
+
+        for (let i = 0; i < pendingUpdates.length; i += 20) {
+          await Promise.all(pendingUpdates.slice(i, i + 20).map(fn => fn()));
         }
 
         // Reconcile egg inventories and flock counts after sales commit
-        try {
-          await cleanDuplicateEggInventories(targetFarmId);
-          await reconcileEggInventoryForFarm(targetFarmId);
-          await reconcileAllFlocksInventory();
-        } catch {}
+        if (!skipReconcile) {
+          try {
+            await cleanDuplicateEggInventories(targetFarmId);
+            await reconcileEggInventoryForFarm(targetFarmId);
+            await reconcileAllFlocksInventory();
+          } catch {}
+        }
       }
 
-      // 4. Log the entry into audit trail
-      await logAudit(
-        req,
-        '',
-        'BulkDataImport',
-        `Bulk Import Executed: ${type}`,
-        { type, validRowsMatchedCount: validRecords.length, savedInDatabaseCount: saveCount, duplicateSkipCount },
-        'SUCCESS'
-      );
+      // 4. Log the entry into audit trail (non-fatal)
+      if (!skipReconcile) {
+        try {
+          await logAudit(
+            req,
+            '',
+            'BulkDataImport',
+            `Bulk Import Executed: ${type}`,
+            { type, validRowsMatchedCount: validRecords.length, savedInDatabaseCount: saveCount, duplicateSkipCount },
+            'SUCCESS'
+          );
+        } catch {}
+      }
 
       res.json({
         message: `Successfully synchronized and locked ${saveCount} records. ${duplicateSkipCount > 0 ? `${duplicateSkipCount} duplicates skipped.` : ''}`,
@@ -2676,15 +2965,17 @@ export const bulkImportControllers = {
       });
 
     } catch (error: any) {
-      await logAudit(
-        req,
-        '',
-        'BulkDataImport',
-        `Bulk Import Failed: ${type}`,
-        { type },
-        'FAILED',
-        error.message
-      );
+      try {
+        await logAudit(
+          req,
+          '',
+          'BulkDataImport',
+          `Bulk Import Failed: ${type}`,
+          { type },
+          'FAILED',
+          error.message
+        );
+      } catch {}
       res.status(500).json({ error: error.message });
     }
   },
