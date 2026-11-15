@@ -3,7 +3,7 @@ import { query } from './db.js';
 import { logAudit, cleanDuplicateEggInventories, reconcileEggInventoryForFarm } from './controllers.js';
 import { supabaseServer, syncRecordToSupabase, reconcileAllFlocksInventory } from './supabase.js';
 import * as XLSX from 'xlsx';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import { keyPool } from './keyPool.js';
 
 // Detect delimiter based on first row
@@ -71,50 +71,123 @@ export function cleanFloat(val: any, defaultVal = 0): number {
   return isNaN(num) ? defaultVal : num;
 }
 
+const MONTH_NAME_MAP: Record<string, string> = {
+  jan: '01', january: '01',
+  feb: '02', february: '02',
+  mar: '03', march: '03',
+  apr: '04', april: '04',
+  may: '05',
+  jun: '06', june: '06',
+  jul: '07', july: '07',
+  aug: '08', august: '08',
+  sep: '09', sept: '09', september: '09',
+  oct: '10', october: '10',
+  nov: '11', november: '11',
+  dec: '12', december: '12'
+};
+
+function expandTwoDigitYear(yy: string): string {
+  const num = parseInt(yy, 10);
+  if (isNaN(num)) return yy;
+  return num >= 80 ? `19${yy.padStart(2, '0')}` : `20${yy.padStart(2, '0')}`;
+}
+
+function isValidYmdParts(year: number, month: number, day: number): boolean {
+  if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  return dt.getUTCFullYear() === year && dt.getUTCMonth() === month - 1 && dt.getUTCDate() === day;
+}
+
 export function cleanDate(rawDate: any): string {
   if (rawDate === undefined || rawDate === null) return '';
+
+  if (rawDate instanceof Date && !isNaN(rawDate.getTime())) {
+    const y = rawDate.getFullYear();
+    const m = String(rawDate.getMonth() + 1).padStart(2, '0');
+    const d = String(rawDate.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
   const str = String(rawDate)
-    .replace(/[\uFEFF\u200B\u200C\u200D\u00A0]/g, '')
+    .replace(/[\uFEFF\u200B\u200C\u200D\u00A0]/g, ' ')
     .trim();
   if (!str) return '';
 
-  // Strip trailing time portion (e.g. "11-01-2025 00:00:00" or "2025-01-11T00:00:00")
-  const dateOnly = str.split(/[ T]/)[0].trim();
-
-  // YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return dateOnly;
-
-  // DD/MM/YYYY or DD-MM-YYYY
-  const dmy = dateOnly.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (dmy) {
-    return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
-  }
-
-  // YYYY/MM/DD
-  const ymd = dateOnly.match(/^(\d{4})[\/](\d{1,2})[\/](\d{1,2})$/);
-  if (ymd) {
-    return `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
-  }
-
-  // MM/DD/YYYY or MM-DD-YYYY fallback
-  const mdy = dateOnly.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-  if (mdy && Number(mdy[1]) <= 12 && Number(mdy[2]) > 12) {
-    const yr = mdy[3].length === 2 ? `20${mdy[3]}` : mdy[3];
-    return `${yr}-${mdy[1].padStart(2, '0')}-${mdy[2].padStart(2, '0')}`;
-  }
-
-  // Excel serial date number (e.g. 45668)
-  if (/^\d{5}$/.test(dateOnly)) {
-    const num = Number(dateOnly);
-    if (num >= 30000 && num <= 60000) {
-      const excelEpoch = new Date(1899, 11, 30);
-      const targetDate = new Date(excelEpoch.getTime() + num * 86400000);
+  // Excel serial date number (integer or decimal like 46113 or 46113.45)
+  if (/^\d{5}(?:\.\d+)?$/.test(str)) {
+    const num = Math.floor(Number(str));
+    if (num >= 25000 && num <= 65000) {
+      const targetDate = new Date(Date.UTC(1899, 11, 30) + num * 86400000);
       if (!isNaN(targetDate.getTime())) {
-        const y = targetDate.getFullYear();
-        const m = String(targetDate.getMonth() + 1).padStart(2, '0');
-        const d = String(targetDate.getDate()).padStart(2, '0');
+        const y = targetDate.getUTCFullYear();
+        const m = String(targetDate.getUTCMonth() + 1).padStart(2, '0');
+        const d = String(targetDate.getUTCDate()).padStart(2, '0');
         return `${y}-${m}-${d}`;
       }
+    }
+  }
+
+  // Strip trailing time portion & English ordinal suffixes (e.g. "01-04-2026 00:00:00", "2026-04-01T14:30:00Z", "1st Apr 2026")
+  const dateOnly = str
+    .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:\s*(?:AM|PM))?(?:Z|[+-]\d{2}:?\d{2})?$/i, '')
+    .split('T')[0]
+    .replace(/(\d+)(st|nd|rd|th)\b/gi, '$1')
+    .trim();
+
+  // YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+  const ymd = dateOnly.match(/^(\d{4})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})$/);
+  if (ymd) {
+    const yr = Number(ymd[1]), mo = Number(ymd[2]), dy = Number(ymd[3]);
+    if (isValidYmdParts(yr, mo, dy)) {
+      return `${yr}-${String(mo).padStart(2, '0')}-${String(dy).padStart(2, '0')}`;
+    }
+  }
+
+  // DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY, DD/MM/YY, DD-MM-YY, DD.MM.YY (with smart MM/DD fallback if middle token > 12)
+  const dmy = dateOnly.match(/^(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{2}|\d{4})$/);
+  if (dmy) {
+    const p1 = Number(dmy[1]);
+    const p2 = Number(dmy[2]);
+    const yrStr = dmy[3].length === 2 ? expandTwoDigitYear(dmy[3]) : dmy[3];
+    const yr = Number(yrStr);
+    if (p2 > 12 && p1 <= 12 && isValidYmdParts(yr, p1, p2)) {
+      return `${yrStr}-${String(p1).padStart(2, '0')}-${String(p2).padStart(2, '0')}`;
+    }
+    if (isValidYmdParts(yr, p2, p1)) {
+      return `${yrStr}-${String(p2).padStart(2, '0')}-${String(p1).padStart(2, '0')}`;
+    }
+  }
+
+  // Named months: DD-MMM-YYYY, DD MMM YYYY, DD/MMM/YY
+  const dMonY = dateOnly.match(/^(\d{1,2})[\s\/\-.]+([A-Za-z]{3,9})[\s\/\-.,]+(\d{2}|\d{4})$/);
+  if (dMonY) {
+    const dy = Number(dMonY[1]);
+    const moStr = MONTH_NAME_MAP[dMonY[2].toLowerCase()];
+    const yrStr = dMonY[3].length === 2 ? expandTwoDigitYear(dMonY[3]) : dMonY[3];
+    if (moStr && isValidYmdParts(Number(yrStr), Number(moStr), dy)) {
+      return `${yrStr}-${moStr}-${String(dy).padStart(2, '0')}`;
+    }
+  }
+
+  // Named months: MMM DD, YYYY or MMM-DD-YY
+  const monDY = dateOnly.match(/^([A-Za-z]{3,9})[\s\/\-.]+(\d{1,2})[\s\/\-.,]+(\d{2}|\d{4})$/);
+  if (monDY) {
+    const moStr = MONTH_NAME_MAP[monDY[1].toLowerCase()];
+    const dy = Number(monDY[2]);
+    const yrStr = monDY[3].length === 2 ? expandTwoDigitYear(monDY[3]) : monDY[3];
+    if (moStr && isValidYmdParts(Number(yrStr), Number(moStr), dy)) {
+      return `${yrStr}-${moStr}-${String(dy).padStart(2, '0')}`;
+    }
+  }
+
+  // Named months: YYYY-MMM-DD
+  const yMonD = dateOnly.match(/^(\d{4})[\s\/\-.]+([A-Za-z]{3,9})[\s\/\-.]+(\d{1,2})$/);
+  if (yMonD) {
+    const yr = Number(yMonD[1]);
+    const moStr = MONTH_NAME_MAP[yMonD[2].toLowerCase()];
+    const dy = Number(yMonD[3]);
+    if (moStr && isValidYmdParts(yr, Number(moStr), dy)) {
+      return `${yMonD[1]}-${moStr}-${String(dy).padStart(2, '0')}`;
     }
   }
 
@@ -377,19 +450,191 @@ export const HEADER_KEY_MAP: Record<string, string> = {
   description: 'Notes'
 };
 
-export function normalizeRecordKeys(rawRecord: any): any {
+const SALES_HEADER_MAP: Record<string, string> = {
+  invoicenumber: 'InvoiceNumber',
+  invoiceno: 'InvoiceNumber',
+  invno: 'InvoiceNumber',
+  billnumber: 'InvoiceNumber',
+  billno: 'InvoiceNumber',
+  voucherno: 'InvoiceNumber',
+  vouchernumber: 'InvoiceNumber',
+  receiptno: 'InvoiceNumber',
+  refno: 'InvoiceNumber',
+  customername: 'CustomerName',
+  customer: 'CustomerName',
+  partyname: 'CustomerName',
+  party: 'CustomerName',
+  buyer: 'CustomerName',
+  buyername: 'CustomerName',
+  clientname: 'CustomerName',
+  ledgername: 'CustomerName',
+  saledate: 'SaleDate',
+  date: 'SaleDate',
+  billdate: 'SaleDate',
+  invoicedate: 'SaleDate',
+  txndate: 'SaleDate',
+  voucherdate: 'SaleDate',
+  transactiondate: 'SaleDate',
+  itemname: 'ItemName',
+  item: 'ItemName',
+  productname: 'ItemName',
+  product: 'ItemName',
+  particulars: 'ItemName',
+  itemtype: 'ItemType',
+  type: 'ItemType',
+  quantity: 'Quantity',
+  qty: 'Quantity',
+  nos: 'Quantity',
+  pcs: 'Quantity',
+  units: 'Quantity',
+  unitprice: 'UnitPrice',
+  rate: 'UnitPrice',
+  price: 'UnitPrice',
+  sellingprice: 'UnitPrice',
+  gstpercentage: 'GSTPercentage',
+  gst: 'GSTPercentage',
+  gstpercent: 'GSTPercentage',
+  taxrate: 'GSTPercentage',
+  taxpercent: 'GSTPercentage',
+  discount: 'Discount',
+  disc: 'Discount',
+  othercharges: 'OtherCharges',
+  charges: 'OtherCharges',
+  freight: 'OtherCharges',
+  receivedamount: 'ReceivedAmount',
+  received: 'ReceivedAmount',
+  paidamount: 'ReceivedAmount',
+  paid: 'ReceivedAmount',
+  status: 'Status',
+  paymentstatus: 'Status'
+};
+
+const PURCHASES_HEADER_MAP: Record<string, string> = {
+  invoicenumber: 'InvoiceNumber',
+  invoiceno: 'InvoiceNumber',
+  invno: 'InvoiceNumber',
+  billnumber: 'InvoiceNumber',
+  billno: 'InvoiceNumber',
+  voucherno: 'InvoiceNumber',
+  suppliername: 'SupplierName',
+  supplier: 'SupplierName',
+  vendorname: 'SupplierName',
+  vendor: 'SupplierName',
+  partyname: 'SupplierName',
+  party: 'SupplierName',
+  purchasedate: 'PurchaseDate',
+  date: 'PurchaseDate',
+  billdate: 'PurchaseDate',
+  invoicedate: 'PurchaseDate',
+  txndate: 'PurchaseDate',
+  voucherdate: 'PurchaseDate',
+  itemname: 'ItemName',
+  item: 'ItemName',
+  productname: 'ItemName',
+  product: 'ItemName',
+  particulars: 'ItemName',
+  itemtype: 'ItemType',
+  type: 'ItemType',
+  quantity: 'Quantity',
+  qty: 'Quantity',
+  unitprice: 'UnitPrice',
+  rate: 'UnitPrice',
+  price: 'UnitPrice',
+  gstpercentage: 'GSTPercentage',
+  gst: 'GSTPercentage',
+  receivedamount: 'ReceivedAmount',
+  paidamount: 'ReceivedAmount',
+  paid: 'ReceivedAmount',
+  status: 'Status'
+};
+
+const ITEMS_HEADER_MAP: Record<string, string> = {
+  itemname: 'ItemName',
+  item: 'ItemName',
+  productname: 'ItemName',
+  name: 'ItemName',
+  category: 'Category',
+  unitofmeasurement: 'UnitOfMeasurement',
+  uom: 'UnitOfMeasurement',
+  unit: 'UnitOfMeasurement',
+  unitprice: 'UnitPrice',
+  purchaseprice: 'UnitPrice',
+  costprice: 'UnitPrice',
+  sellingprice: 'SellingPrice',
+  saleprice: 'SellingPrice',
+  currentstock: 'CurrentStock',
+  stock: 'CurrentStock',
+  openingstock: 'CurrentStock',
+  qty: 'CurrentStock',
+  weightperunit: 'WeightPerUnit',
+  minthreshold: 'MinThreshold'
+};
+
+export function normalizeRecordKeys(rawRecord: any, importType?: string): any {
   if (!rawRecord) return {};
   const normalized: any = { ...rawRecord };
+  const typeMap =
+    importType === 'sales' ? SALES_HEADER_MAP :
+    importType === 'purchases' ? PURCHASES_HEADER_MAP :
+    importType === 'items' ? ITEMS_HEADER_MAP :
+    null;
+
   for (const [key, val] of Object.entries(rawRecord)) {
     const cleanKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const canonicalKey = HEADER_KEY_MAP[cleanKey];
+    const canonicalKey = (typeMap && typeMap[cleanKey]) || HEADER_KEY_MAP[cleanKey];
     if (canonicalKey) {
       if (normalized[canonicalKey] === undefined || normalized[canonicalKey] === '') {
         normalized[canonicalKey] = typeof val === 'string' ? val.trim() : val;
       }
     }
   }
+
+  // Fallback cross-alias for generic Date column when context is sales/purchases
+  if (importType === 'sales' && !normalized.SaleDate && (normalized.LogDate || normalized.Date)) {
+    normalized.SaleDate = normalized.LogDate || normalized.Date;
+  }
+  if (importType === 'purchases' && !normalized.PurchaseDate && (normalized.LogDate || normalized.Date)) {
+    normalized.PurchaseDate = normalized.LogDate || normalized.Date;
+  }
+
   return normalized;
+}
+
+export function isEggItemName(itemName: string, itemType?: string): boolean {
+  const normType = (itemType || '').toLowerCase().trim();
+  if (normType === 'egg' || normType === 'eggs') return true;
+  if (normType === 'bird' || normType === 'birds' || normType === 'flock') return false;
+
+  const norm = (itemName || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!norm) return false;
+
+  // Exclude equipment/feed/packaging items that merely contain "egg" (e.g. "Egg Carton", "Egg Feeder", "Egg Mash Feed")
+  if (/\b(mash|feed|feeder|carton|box|crate|tray machine|washer|incubator|cleaner|medicine|vaccine)\b/i.test(norm)) {
+    return false;
+  }
+
+  return (
+    norm === 'egg' ||
+    norm === 'eggs' ||
+    /\b(fresh|collected|table|white|brown|layer|culled|damaged|broken|cracked|waste|jumbo|small|medium|large|pullet)\s+eggs?\b/i.test(norm) ||
+    /\beggs?\b/i.test(norm)
+  );
+}
+
+function csvEscapeCell(val: any): string {
+  const s = val === undefined || val === null ? '' : String(val);
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function recordsToCsv(headers: string[], records: Record<string, any>[]): string {
+  const lines: string[] = [headers.map(csvEscapeCell).join(',')];
+  for (const rec of records) {
+    lines.push(headers.map(h => csvEscapeCell(rec[h] ?? '')).join(','));
+  }
+  return lines.join('\n');
 }
 
 export const bulkImportControllers = {
@@ -444,20 +689,24 @@ export const bulkImportControllers = {
           ]);
 
           allFlocks = flkRes.data || [];
-          flocks = targetFarmId ? allFlocks.filter((f: any) => f.FarmId === targetFarmId || !f.FarmId) : allFlocks;
-          inventories = invRes.data || [];
-          suppliers = supRes.data || [];
-          customers = custRes.data || [];
-          eggInventories = eggRes.data || [];
+          flocks = targetFarmId ? allFlocks.filter((f: any) => Number(f.FarmId) === targetFarmId || !f.FarmId) : allFlocks;
+          const allInvs = invRes.data || [];
+          inventories = targetFarmId ? allInvs.filter((i: any) => Number(i.FarmId) === targetFarmId || !i.FarmId) : allInvs;
+          const allSups = supRes.data || [];
+          suppliers = targetFarmId ? allSups.filter((s: any) => Number(s.FarmId) === targetFarmId || !s.FarmId) : allSups;
+          const allCusts = custRes.data || [];
+          customers = targetFarmId ? allCusts.filter((c: any) => Number(c.FarmId) === targetFarmId || !c.FarmId) : allCusts;
+          const allEggs = eggRes.data || [];
+          eggInventories = targetFarmId ? allEggs.filter((e: any) => Number(e.FarmId) === targetFarmId || !e.FarmId) : allEggs;
 
           (purchRes.data || []).forEach((p: any) => {
-            if (p.InvoiceNumber && (p.FarmId === targetFarmId || !p.FarmId)) {
+            if (p.InvoiceNumber && (Number(p.FarmId) === targetFarmId || !p.FarmId)) {
               existingPurchasesInvoices.add(p.InvoiceNumber.toLowerCase().trim());
             }
           });
 
           (salesRes.data || []).forEach((s: any) => {
-            if (s.InvoiceNumber && (s.FarmId === targetFarmId || !s.FarmId)) {
+            if (s.InvoiceNumber && (Number(s.FarmId) === targetFarmId || !s.FarmId)) {
               existingSalesInvoices.add(s.InvoiceNumber.toLowerCase().trim());
             }
           });
@@ -512,8 +761,8 @@ export const bulkImportControllers = {
           }
         });
 
-        // Apply comprehensive alias mapping for columns like "Daily Collected", "Eggs Collected", etc.
-        const record = normalizeRecordKeys(rawRecord);
+        // Apply context-aware alias mapping for columns across all import types
+        const record = normalizeRecordKeys(rawRecord, type);
 
         let status: 'Valid' | 'Duplicate' | 'Invalid' = 'Valid';
         const errors: string[] = [];
@@ -636,11 +885,21 @@ export const bulkImportControllers = {
 
         } else if (type === 'purchases') {
           // Fields: InvoiceNumber, SupplierName, PurchaseDate, ItemName, ItemType, Quantity, UnitPrice, GSTPercentage, ReceivedAmount, Status, Notes
-          const invoiceNo = record.InvoiceNumber || '';
-          const supplierName = record.SupplierName || '';
-          const purchaseDate = record.PurchaseDate || '';
-          const itemName = record.ItemName || '';
-          const itemType = record.ItemType || 'Inventory';
+          const invoiceNo = (record.InvoiceNumber || '').trim();
+          const supplierName = (record.SupplierName || '').trim();
+          const purchaseDate = cleanDate(record.PurchaseDate || '');
+          record.PurchaseDate = purchaseDate;
+          const itemName = (record.ItemName || '').trim();
+          const itemType = (record.ItemType || 'Inventory').trim();
+
+          const qty = cleanFloat(record.Quantity || 0);
+          const price = cleanFloat(record.UnitPrice || 0);
+          const gstPerc = cleanFloat(record.GSTPercentage || 0);
+          const receivedAmt = cleanFloat(record.ReceivedAmount || 0);
+          record.Quantity = String(qty);
+          record.UnitPrice = String(price);
+          record.GSTPercentage = String(gstPerc);
+          record.ReceivedAmount = String(receivedAmt);
 
           if (!supplierName) {
             errors.push('Missing SupplierName');
@@ -654,14 +913,10 @@ export const bulkImportControllers = {
             errors.push('Missing ItemName');
             status = 'Invalid';
           }
-          
-          const qty = parseFloat(record.Quantity || '0');
           if (isNaN(qty) || qty <= 0) {
             errors.push('Quantity must be a positive number');
             status = 'Invalid';
           }
-
-          const price = parseFloat(record.UnitPrice || '0');
           if (isNaN(price) || price < 0) {
             errors.push('UnitPrice must be 0 or greater');
             status = 'Invalid';
@@ -671,7 +926,7 @@ export const bulkImportControllers = {
             status = 'Duplicate';
             details.push(`Invoice "${invoiceNo}" already exists in Purchases. It will be skipped.`);
           } else {
-            const matchedSupplier = suppliers.find(s => s.CompanyName.toLowerCase().trim() === supplierName.toLowerCase().trim());
+            const matchedSupplier = suppliers.find(s => (s.CompanyName || '').toLowerCase().trim() === supplierName.toLowerCase().trim());
             if (matchedSupplier) {
               record._supplierId = matchedSupplier.Id;
               details.push(`Matched existing Supplier: "${supplierName}"`);
@@ -679,7 +934,8 @@ export const bulkImportControllers = {
               details.push(`Supplier name "${supplierName}" is new. A new supplier profile will be auto-generated.`);
             }
 
-            if (itemType === 'Flock') {
+            if (itemType.toLowerCase() === 'flock') {
+              record.ItemType = 'Flock';
               const flockMatch = findSmartFlockMatch(itemName, flocks, allFlocks);
               if (!flockMatch) {
                 errors.push(`Flock name "${itemName}" must be created first to purchase flock items`);
@@ -689,7 +945,8 @@ export const bulkImportControllers = {
                 details.push(`Matched active flock "${flockMatch.flock.FlockName}"`);
               }
             } else {
-              const matchedItem = inventories.find(inv => inv.ItemName.toLowerCase().trim() === itemName.toLowerCase().trim());
+              record.ItemType = 'Inventory';
+              const matchedItem = inventories.find(inv => (inv.ItemName || '').toLowerCase().trim() === itemName.toLowerCase().trim());
               if (!matchedItem) {
                 errors.push(`Inventory Item "${itemName}" not found. Create it or match exact spelling.`);
                 status = 'Invalid';
@@ -702,11 +959,47 @@ export const bulkImportControllers = {
 
         } else if (type === 'sales') {
           // Fields: InvoiceNumber, CustomerName, SaleDate, ItemName, ItemType, Quantity, UnitPrice, GSTPercentage, Discount, OtherCharges, ReceivedAmount, Status, Notes
-          const invoiceNo = record.InvoiceNumber || '';
-          const customerName = record.CustomerName || '';
-          const saleDate = record.SaleDate || '';
-          const itemName = record.ItemName || '';
-          const itemType = record.ItemType || 'General Inventory';
+          const invoiceNo = (record.InvoiceNumber || '').trim();
+          const customerName = (record.CustomerName || '').trim();
+          const saleDate = cleanDate(record.SaleDate || '');
+          record.SaleDate = saleDate;
+          const itemName = (record.ItemName || '').trim();
+
+          const qty = cleanFloat(record.Quantity || 0);
+          const price = cleanFloat(record.UnitPrice || 0);
+          const gstPerc = cleanFloat(record.GSTPercentage || 0);
+          const discount = cleanFloat(record.Discount || 0);
+          const otherCharges = cleanFloat(record.OtherCharges || 0);
+          const receivedAmt = cleanFloat(record.ReceivedAmount || 0);
+
+          record.Quantity = String(qty);
+          record.UnitPrice = String(price);
+          record.GSTPercentage = String(gstPerc);
+          record.Discount = String(discount);
+          record.OtherCharges = String(otherCharges);
+          record.ReceivedAmount = String(receivedAmt);
+
+          // Resolve exact warehouse match before inferring Egg vs General Inventory
+          const exactWarehouseMatch = inventories.find(
+            inv => (inv.ItemName || '').toLowerCase().trim() === itemName.toLowerCase()
+          );
+
+          const rawTypeLower = (record.ItemType || '').toLowerCase().trim();
+          let resolvedItemType: 'Egg' | 'Bird' | 'General Inventory' = 'General Inventory';
+          if (rawTypeLower === 'egg' || rawTypeLower === 'eggs') {
+            resolvedItemType = 'Egg';
+          } else if (rawTypeLower === 'bird' || rawTypeLower === 'birds' || rawTypeLower === 'flock') {
+            resolvedItemType = 'Bird';
+          } else if (
+            isEggItemName(itemName, record.ItemType) &&
+            (!exactWarehouseMatch || /^(eggs?|fresh\s*eggs?|collected\s*eggs?)$/i.test(itemName))
+          ) {
+            // Item "Eggs" or egg varieties should automatically map to collected eggs in EggInventories
+            resolvedItemType = 'Egg';
+          } else if (!exactWarehouseMatch && /\b(bird|birds|hen|hens|broiler|layer|cull|culls|flock)\b/i.test(itemName)) {
+            resolvedItemType = 'Bird';
+          }
+          record.ItemType = resolvedItemType;
 
           if (!customerName) {
             errors.push('Missing CustomerName');
@@ -720,14 +1013,10 @@ export const bulkImportControllers = {
             errors.push('Missing ItemName');
             status = 'Invalid';
           }
-
-          const qty = parseFloat(record.Quantity || '0');
           if (isNaN(qty) || qty <= 0) {
             errors.push('Quantity must be a positive number');
             status = 'Invalid';
           }
-
-          const price = parseFloat(record.UnitPrice || '0');
           if (isNaN(price) || price < 0) {
             errors.push('UnitPrice must be 0 or greater');
             status = 'Invalid';
@@ -737,7 +1026,7 @@ export const bulkImportControllers = {
             status = 'Duplicate';
             details.push(`Invoice "${invoiceNo}" already exists in Sales. It will be skipped.`);
           } else {
-            const matchedCustomer = customers.find(c => c.FullName.toLowerCase().trim() === customerName.toLowerCase().trim());
+            const matchedCustomer = customers.find(c => (c.FullName || '').toLowerCase().trim() === customerName.toLowerCase().trim());
             if (matchedCustomer) {
               record._customerId = matchedCustomer.Id;
               details.push(`Found existing Customer: "${customerName}"`);
@@ -745,7 +1034,7 @@ export const bulkImportControllers = {
               details.push(`Customer "${customerName}" is new. A profile will be auto-generated.`);
             }
 
-            if (itemType === 'Bird') {
+            if (resolvedItemType === 'Bird') {
               const flockMatch = findSmartFlockMatch(itemName, flocks, allFlocks);
               if (!flockMatch) {
                 errors.push(`Flock/Bird name "${itemName}" not found in current layer flocks.`);
@@ -754,26 +1043,35 @@ export const bulkImportControllers = {
                 record._flockId = flockMatch.flock.Id;
                 details.push(`Matched Flock: "${flockMatch.flock.FlockName}" (ID: #${flockMatch.flock.Id})`);
               }
-            } else if (itemType === 'Egg') {
-              const matchedEgg = eggInventories.find(e => e.GradeOrType.toLowerCase().trim() === itemName.toLowerCase().trim());
-              if (!matchedEgg) {
-                // fall back to default
-                const defEgg = eggInventories.find(e => e.GradeOrType === 'Fresh Eggs') || eggInventories[0];
-                record._eggInventoryId = defEgg ? defEgg.Id : 1;
-                details.push(`Egg category assumed: "${defEgg ? defEgg.GradeOrType : 'Fresh Eggs'}"`);
+            } else if (resolvedItemType === 'Egg') {
+              const isDamaged = /\b(damaged|waste|broken|cracked)\b/i.test(itemName);
+              const matchedEgg = eggInventories.find(
+                e => (e.GradeOrType || '').toLowerCase().trim() === itemName.toLowerCase().trim()
+              );
+              const preferredEgg =
+                matchedEgg ||
+                (isDamaged
+                  ? eggInventories.find(e => /damaged|waste/i.test(e.GradeOrType || ''))
+                  : eggInventories.find(e => (e.GradeOrType || '').toLowerCase().trim() === 'fresh eggs')) ||
+                eggInventories[0];
+
+              if (preferredEgg) {
+                record._eggInventoryId = preferredEgg.Id;
+                record._eggGradeOrType = preferredEgg.GradeOrType;
+                details.push(`Matched Collected Eggs Inventory: "${preferredEgg.GradeOrType}" (Available: ${Number(preferredEgg.Quantity || 0).toLocaleString()})`);
               } else {
-                record._eggInventoryId = matchedEgg.Id;
-                details.push(`Matched Egg Category: "${matchedEgg.GradeOrType}"`);
+                record._eggInventoryId = null;
+                record._eggGradeOrType = isDamaged ? 'Damaged/Waste Eggs' : 'Fresh Eggs';
+                details.push(`Collected Eggs Inventory "${record._eggGradeOrType}" will be linked on commit.`);
               }
             } else {
               // General Inventory
-              const matchedItem = inventories.find(inv => inv.ItemName.toLowerCase().trim() === itemName.toLowerCase().trim());
-              if (!matchedItem) {
+              if (!exactWarehouseMatch) {
                 errors.push(`Item "${itemName}" is not registered in Warehouse Stock`);
                 status = 'Invalid';
               } else {
-                record._inventoryId = matchedItem.Id;
-                details.push(`Matched Item: "${itemName}" (Stock ID: ${matchedItem.Id})`);
+                record._inventoryId = exactWarehouseMatch.Id;
+                details.push(`Matched Item: "${itemName}" (Stock ID: ${exactWarehouseMatch.Id})`);
               }
             }
           }
@@ -1144,33 +1442,62 @@ export const bulkImportControllers = {
 
 
       } else if (type === 'purchases') {
-        for (const pr of validRecords) {
-          const rec = pr.record;
-          const invoiceNo = rec.InvoiceNumber || '';
-          
-          if (invoiceNo) {
-            const exists = await query.get('SELECT Id FROM Purchases WHERE InvoiceNumber = ? AND (FarmId = ? OR FarmId IS NULL)', [invoiceNo, targetFarmId]);
-            if (exists) {
-              duplicateSkipCount++;
-              continue;
-            }
-          }
+        if (!supabaseServer) {
+          throw new Error('Cloud database connection unavailable for purchases bulk import.');
+        }
 
-          // Generate or lookup supplier
-          let supplierId = rec._supplierId;
-          if (!supplierId) {
-            const supplierName = rec.SupplierName;
-            const existingSupplier = await query.get<{ Id: number }>('SELECT Id FROM Suppliers WHERE (FarmId = ? OR FarmId IS NULL) AND CompanyName = ?', [targetFarmId, supplierName]);
-            if (existingSupplier) {
-              supplierId = existingSupplier.Id;
-            } else {
-              const newSup = await query.run(`
-                INSERT INTO Suppliers (FarmId, CompanyName, ContactPerson, Email, Phone, OpeningCreditBalance, CurrentCreditBalance, Address)
-                VALUES (?, ?, '', '', '', 0, 0, '')
-              `, [targetFarmId, supplierName]);
-              supplierId = newSup.lastID;
-              syncRecordToSupabase('Suppliers', {
-                Id: supplierId,
+        const { data: existingPurch } = await supabaseServer
+          .from('Purchases')
+          .select('InvoiceNumber')
+          .eq('FarmId', targetFarmId)
+          .limit(100000);
+        const existingPurchSet = new Set<string>(
+          (existingPurch || []).map((p: any) => (p.InvoiceNumber || '').toLowerCase().trim()).filter(Boolean)
+        );
+
+        const { data: existingSups } = await supabaseServer
+          .from('Suppliers')
+          .select('Id, CompanyName')
+          .eq('FarmId', targetFarmId)
+          .limit(10000);
+        const supplierCache = new Map<string, number>();
+        (existingSups || []).forEach((s: any) => {
+          if (s.CompanyName) supplierCache.set(s.CompanyName.toLowerCase().trim(), Number(s.Id));
+        });
+
+        // Group lines sharing a non-empty InvoiceNumber into one parent Purchase + multiple PurchaseItems
+        const groupedBatches: Array<{ invoiceNo: string; lines: any[] }> = [];
+        const invoiceGroupMap = new Map<string, { invoiceNo: string; lines: any[] }>();
+        for (const pr of validRecords) {
+          const rec = normalizeRecordKeys(pr.record, 'purchases');
+          const invNo = (rec.InvoiceNumber || '').trim();
+          const key = invNo ? invNo.toLowerCase() : '';
+          if (key && existingPurchSet.has(key)) {
+            duplicateSkipCount++;
+            continue;
+          }
+          if (key) {
+            if (!invoiceGroupMap.has(key)) {
+              const g = { invoiceNo: invNo, lines: [] as any[] };
+              invoiceGroupMap.set(key, g);
+              groupedBatches.push(g);
+            }
+            invoiceGroupMap.get(key)!.lines.push(rec);
+          } else {
+            groupedBatches.push({ invoiceNo: '', lines: [rec] });
+          }
+        }
+
+        for (const batch of groupedBatches) {
+          const first = batch.lines[0];
+          const supplierName = (first.SupplierName || '').trim();
+          const supKey = supplierName.toLowerCase();
+          let supplierId = first._supplierId ? Number(first._supplierId) : supplierCache.get(supKey);
+
+          if (!supplierId && supplierName) {
+            const { data: newSup, error: supErr } = await supabaseServer
+              .from('Suppliers')
+              .insert([{
                 FarmId: targetFarmId,
                 CompanyName: supplierName,
                 ContactPerson: '',
@@ -1179,127 +1506,217 @@ export const bulkImportControllers = {
                 OpeningCreditBalance: 0,
                 CurrentCreditBalance: 0,
                 Address: ''
-              });
+              }])
+              .select('Id')
+              .single();
+            if (!supErr && newSup) {
+              supplierId = Number(newSup.Id);
+              supplierCache.set(supKey, supplierId);
             }
           }
 
-          const purchaseDate = rec.PurchaseDate;
-          const itemType = rec.ItemType || 'Inventory';
-          const qty = parseFloat(rec.Quantity || '0');
-          const price = parseFloat(rec.UnitPrice || '0');
-          const gstPerc = parseFloat(rec.GSTPercentage || '0');
-          
-          const totalPrice = qty * price;
-          const gstAmount = totalPrice * (gstPerc / 100);
-          const grandTotal = totalPrice + gstAmount;
+          const purchaseDate = cleanDate(first.PurchaseDate);
+          if (!purchaseDate || !/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)) continue;
 
-          const receivedAmt = parseFloat(rec.ReceivedAmount || '0');
-          const balanceAmt = grandTotal - receivedAmt;
-          const status = balanceAmt <= 0 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
-          const notes = rec.Notes || '';
+          let batchSubTotal = 0;
+          let batchGst = 0;
+          const preparedLines: any[] = [];
+          for (const rec of batch.lines) {
+            const qty = cleanFloat(rec.Quantity || 0);
+            const price = cleanFloat(rec.UnitPrice || 0);
+            const gstPerc = cleanFloat(rec.GSTPercentage || 0);
+            const lineTotal = qty * price;
+            const lineGst = lineTotal * (gstPerc / 100);
+            batchSubTotal += lineTotal;
+            batchGst += lineGst;
+            preparedLines.push({
+              inventoryId: rec._inventoryId ? Number(rec._inventoryId) : null,
+              itemType: rec.ItemType === 'Flock' ? 'Flock' : 'Inventory',
+              qty,
+              price,
+              gstPerc,
+              lineGst,
+              lineTotal,
+              finalLanded: lineTotal + lineGst
+            });
+          }
 
-          // 1. Insert parent purchase row
-          const pResult = await query.run(`
-            INSERT INTO Purchases (FarmId, SupplierId, PurchaseDate, TotalAmount, TotalGSTAmount, OtherTaxes, ReceivedAmount, BalanceAmount, InvoiceNumber, Status, Notes)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-          `, [targetFarmId, supplierId, purchaseDate, grandTotal, gstAmount, receivedAmt, balanceAmt, invoiceNo, status, notes]);
-          
-          const purchaseId = pResult.lastID;
-          syncRecordToSupabase('Purchases', {
-            Id: purchaseId,
-            FarmId: targetFarmId,
-            SupplierId: supplierId,
-            PurchaseDate: purchaseDate,
-            TotalAmount: grandTotal,
-            TotalGSTAmount: gstAmount,
-            OtherTaxes: 0,
-            ReceivedAmount: receivedAmt,
-            BalanceAmount: balanceAmt,
-            InvoiceNumber: invoiceNo,
-            Status: status,
-            Notes: notes
-          });
+          const grandTotal = batchSubTotal + batchGst;
+          const explicitStatus = (first.Status || '').trim().toLowerCase();
+          let receivedAmt = cleanFloat(first.ReceivedAmount || 0);
+          if (receivedAmt === 0 && explicitStatus === 'paid') {
+            receivedAmt = grandTotal;
+          }
+          const balanceAmt = Math.max(0, grandTotal - receivedAmt);
+          const status: 'Paid' | 'Partial' | 'Unpaid' =
+            balanceAmt <= 0.01 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
+          const notes = (first.Notes || '').trim();
 
-          // 2. Insert child item details
-          let inventoryId = rec._inventoryId || null;
-          const piResult = await query.run(`
-            INSERT INTO PurchaseItems (PurchaseId, InventoryId, ItemType, Quantity, UnitPrice, GSTPercentage, GSTAmount, TotalPrice, WeightPerUnit, AllocatedOverhead, FinalLandedAmount)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?)
-          `, [purchaseId, inventoryId, itemType, qty, price, gstPerc, gstAmount, totalPrice, grandTotal]);
+          const { data: insertedPurch, error: pErr } = await supabaseServer
+            .from('Purchases')
+            .insert([{
+              FarmId: targetFarmId,
+              SupplierId: supplierId || null,
+              PurchaseDate: purchaseDate,
+              TotalAmount: grandTotal,
+              TotalGSTAmount: batchGst,
+              OtherTaxes: 0,
+              ReceivedAmount: receivedAmt,
+              BalanceAmount: balanceAmt,
+              InvoiceNumber: batch.invoiceNo,
+              Status: status,
+              Notes: notes
+            }])
+            .select('Id')
+            .single();
 
-          syncRecordToSupabase('PurchaseItems', {
-            Id: piResult.lastID,
-            PurchaseId: purchaseId,
-            InventoryId: inventoryId,
-            ItemType: itemType,
-            Quantity: qty,
-            UnitPrice: price,
-            GSTPercentage: gstPerc,
-            GSTAmount: gstAmount,
-            TotalPrice: totalPrice,
-            WeightPerUnit: 1,
-            AllocatedOverhead: 0,
-            FinalLandedAmount: grandTotal
-          });
+          if (pErr || !insertedPurch) {
+            throw new Error(pErr?.message || 'Failed inserting Purchase record into database.');
+          }
 
-          // 3. Keep stock index synced and update items unit price
-          if (inventoryId) {
-            const originalInv = await query.get<{ CurrentStock: number, UnitPrice: number }>('SELECT CurrentStock, UnitPrice FROM Inventories WHERE Id = ?', [inventoryId]);
-            if (originalInv) {
-              const oldStock = originalInv.CurrentStock || 0;
-              const oldPrice = originalInv.UnitPrice || 0;
-              const newStock = oldStock + qty;
-              const newUnitPrice = newStock > 0 ? ((oldStock * oldPrice) + grandTotal) / newStock : oldPrice;
+          const purchaseId = Number(insertedPurch.Id);
+          for (const line of preparedLines) {
+            await supabaseServer.from('PurchaseItems').insert([{
+              PurchaseId: purchaseId,
+              InventoryId: line.inventoryId,
+              ItemType: line.itemType,
+              Quantity: line.qty,
+              UnitPrice: line.price,
+              GSTPercentage: line.gstPerc,
+              GSTAmount: line.lineGst,
+              TotalPrice: line.lineTotal,
+              WeightPerUnit: 1,
+              AllocatedOverhead: 0,
+              FinalLandedAmount: line.finalLanded
+            }]);
 
-              await query.run(`
-                UPDATE Inventories
-                SET CurrentStock = CurrentStock + ?, UnitPrice = ?
-                WHERE Id = ?
-              `, [qty, newUnitPrice, inventoryId]);
-
-              syncRecordToSupabase('Inventories', {
-                Id: inventoryId,
-                FarmId: targetFarmId,
-                CurrentStock: newStock,
-                UnitPrice: newUnitPrice
-              });
+            if (line.inventoryId) {
+              const { data: origInv } = await supabaseServer
+                .from('Inventories')
+                .select('CurrentStock, UnitPrice')
+                .eq('Id', line.inventoryId)
+                .maybeSingle();
+              if (origInv) {
+                const oldStock = Number(origInv.CurrentStock) || 0;
+                const oldPrice = Number(origInv.UnitPrice) || 0;
+                const newStock = oldStock + line.qty;
+                const newUnitPrice = newStock > 0 ? ((oldStock * oldPrice) + line.finalLanded) / newStock : oldPrice;
+                await supabaseServer
+                  .from('Inventories')
+                  .update({ CurrentStock: newStock, UnitPrice: newUnitPrice })
+                  .eq('Id', line.inventoryId);
+              }
             }
           }
 
-          saveCount++;
+          saveCount += batch.lines.length;
         }
 
       } else if (type === 'sales') {
-        const defaultCat = await query.get<{ Id: number }>('SELECT Id FROM TransactionCategories WHERE Name = "Egg Sales" ORDER BY Id LIMIT 1');
-        const financialCatId = defaultCat?.Id || 1;
+        if (!supabaseServer) {
+          throw new Error('Cloud database connection unavailable for sales bulk import.');
+        }
 
-        for (const pr of validRecords) {
-          const rec = pr.record;
-          const invoiceNo = rec.InvoiceNumber || '';
+        const { data: existingSales } = await supabaseServer
+          .from('Sales')
+          .select('InvoiceNumber')
+          .eq('FarmId', targetFarmId)
+          .limit(100000);
+        const existingSalesSet = new Set<string>(
+          (existingSales || []).map((s: any) => (s.InvoiceNumber || '').toLowerCase().trim()).filter(Boolean)
+        );
 
-          if (invoiceNo) {
-            const exists = await query.get('SELECT Id FROM Sales WHERE InvoiceNumber = ? AND (FarmId = ? OR FarmId IS NULL)', [invoiceNo, targetFarmId]);
-            if (exists) {
-              duplicateSkipCount++;
-              continue;
-            }
+        const { data: existingCusts } = await supabaseServer
+          .from('Customers')
+          .select('Id, FullName, CurrentCreditBalance')
+          .eq('FarmId', targetFarmId)
+          .limit(10000);
+        const customerCache = new Map<string, { id: number; credit: number }>();
+        (existingCusts || []).forEach((c: any) => {
+          if (c.FullName) {
+            customerCache.set(c.FullName.toLowerCase().trim(), {
+              id: Number(c.Id),
+              credit: Number(c.CurrentCreditBalance) || 0
+            });
           }
+        });
 
-          // Resolve Customer profile
-          let customerId = rec._customerId;
-          if (!customerId) {
-            const customerName = rec.CustomerName;
-            const existingCustomer = await query.get<{ Id: number }>('SELECT Id FROM Customers WHERE (FarmId = ? OR FarmId IS NULL) AND FullName = ?', [targetFarmId, customerName]);
-            if (existingCustomer) {
-              customerId = existingCustomer.Id;
-            } else {
-              const newCust = await query.run(`
-                INSERT INTO Customers (FarmId, FullName, Email, Phone, Company, OpeningCreditBalance, CurrentCreditBalance, Address)
-                VALUES (?, ?, '', '', '', 0, 0, '')
-              `, [targetFarmId, customerName]);
-              customerId = newCust.lastID;
-              syncRecordToSupabase('Customers', {
-                Id: customerId,
+        const { data: farmEggs } = await supabaseServer
+          .from('EggInventories')
+          .select('Id, GradeOrType, Quantity')
+          .eq('FarmId', targetFarmId)
+          .limit(100);
+        const eggInventoryMap = new Map<number, { id: number; grade: string; qty: number }>();
+        const eggByGrade = new Map<string, number>();
+        (farmEggs || []).forEach((e: any) => {
+          const eid = Number(e.Id);
+          eggInventoryMap.set(eid, { id: eid, grade: e.GradeOrType || 'Fresh Eggs', qty: Number(e.Quantity) || 0 });
+          if (e.GradeOrType) eggByGrade.set(e.GradeOrType.toLowerCase().trim(), eid);
+        });
+
+        // Resolve or create TransactionCategories for FinancialTransactions
+        const { data: existingCats } = await supabaseServer
+          .from('TransactionCategories')
+          .select('Id, Name')
+          .or(`FarmId.eq.${targetFarmId},FarmId.is.null`)
+          .limit(200);
+        const catMap = new Map<string, number>();
+        (existingCats || []).forEach((c: any) => {
+          if (c.Name) catMap.set(c.Name.toLowerCase().trim(), Number(c.Id));
+        });
+
+        const ensureCategoryId = async (catName: string): Promise<number | null> => {
+          const existingId = catMap.get(catName.toLowerCase());
+          if (existingId) return existingId;
+          const { data: createdCat } = await supabaseServer
+            .from('TransactionCategories')
+            .insert([{ FarmId: targetFarmId, Name: catName, IsIncome: 1, Description: `${catName} income` }])
+            .select('Id')
+            .maybeSingle();
+          if (createdCat?.Id) {
+            catMap.set(catName.toLowerCase(), Number(createdCat.Id));
+            return Number(createdCat.Id);
+          }
+          const firstAny = catMap.values().next().value;
+          return firstAny || null;
+        };
+
+        // Group lines sharing a non-empty InvoiceNumber into one parent Sales invoice + multiple SaleItems
+        const groupedSales: Array<{ invoiceNo: string; lines: any[] }> = [];
+        const invoiceGroupMap = new Map<string, { invoiceNo: string; lines: any[] }>();
+        for (const pr of validRecords) {
+          const rec = normalizeRecordKeys(pr.record, 'sales');
+          const invNo = (rec.InvoiceNumber || '').trim();
+          const key = invNo ? invNo.toLowerCase() : '';
+          if (key && existingSalesSet.has(key)) {
+            duplicateSkipCount++;
+            continue;
+          }
+          if (key) {
+            if (!invoiceGroupMap.has(key)) {
+              const g = { invoiceNo: invNo, lines: [] as any[] };
+              invoiceGroupMap.set(key, g);
+              groupedSales.push(g);
+            }
+            invoiceGroupMap.get(key)!.lines.push(rec);
+          } else {
+            groupedSales.push({ invoiceNo: '', lines: [rec] });
+          }
+        }
+
+        for (const batch of groupedSales) {
+          const first = batch.lines[0];
+          const customerName = (first.CustomerName || '').trim();
+          const custKey = customerName.toLowerCase();
+          let custEntry = customerCache.get(custKey);
+
+          if (!custEntry && first._customerId) {
+            custEntry = { id: Number(first._customerId), credit: 0 };
+          }
+          if (!custEntry && customerName) {
+            const { data: newCust, error: custErr } = await supabaseServer
+              .from('Customers')
+              .insert([{
                 FarmId: targetFarmId,
                 FullName: customerName,
                 Email: '',
@@ -1308,143 +1725,207 @@ export const bulkImportControllers = {
                 OpeningCreditBalance: 0,
                 CurrentCreditBalance: 0,
                 Address: ''
-              });
+              }])
+              .select('Id')
+              .single();
+            if (custErr || !newCust) {
+              throw new Error(custErr?.message || `Failed creating customer "${customerName}"`);
+            }
+            custEntry = { id: Number(newCust.Id), credit: 0 };
+            customerCache.set(custKey, custEntry);
+          }
+          if (!custEntry) continue;
+
+          const saleDate = cleanDate(first.SaleDate);
+          if (!saleDate || !/^\d{4}-\d{2}-\d{2}$/.test(saleDate)) continue;
+
+          let subTotal = 0;
+          let totalGst = 0;
+          const discount = cleanFloat(first.Discount || 0);
+          const otherCharges = cleanFloat(first.OtherCharges || 0);
+
+          const preparedItems: any[] = [];
+          for (const rec of batch.lines) {
+            const itemName = (rec.ItemName || '').trim();
+            const itemType: 'Bird' | 'Egg' | 'General Inventory' =
+              rec.ItemType === 'Bird' ? 'Bird' :
+              (rec.ItemType === 'Egg' || isEggItemName(itemName, rec.ItemType)) ? 'Egg' :
+              'General Inventory';
+
+            const qty = cleanFloat(rec.Quantity || 0);
+            const price = cleanFloat(rec.UnitPrice || 0);
+            const gstPerc = cleanFloat(rec.GSTPercentage || 0);
+            const lineSub = qty * price;
+            const lineGst = lineSub * (gstPerc / 100);
+            subTotal += lineSub;
+            totalGst += lineGst;
+
+            let eggInventoryId: number | null = rec._eggInventoryId ? Number(rec._eggInventoryId) : null;
+            if (itemType === 'Egg' && !eggInventoryId) {
+              const targetGrade = /\b(damaged|waste|broken|cracked)\b/i.test(itemName)
+                ? 'Damaged/Waste Eggs'
+                : (rec._eggGradeOrType || 'Fresh Eggs');
+              let foundId = eggByGrade.get(targetGrade.toLowerCase()) || eggByGrade.get('fresh eggs');
+              if (!foundId) {
+                const { data: createdEgg } = await supabaseServer
+                  .from('EggInventories')
+                  .insert([{
+                    FarmId: targetFarmId,
+                    GradeOrType: targetGrade,
+                    PackSize: 'Single',
+                    Quantity: 0,
+                    UnitPrice: price,
+                    SellingPrice: price
+                  }])
+                  .select('Id')
+                  .maybeSingle();
+                if (createdEgg?.Id) {
+                  foundId = Number(createdEgg.Id);
+                  eggInventoryMap.set(foundId, { id: foundId, grade: targetGrade, qty: 0 });
+                  eggByGrade.set(targetGrade.toLowerCase(), foundId);
+                }
+              }
+              eggInventoryId = foundId || null;
+            }
+
+            preparedItems.push({
+              itemType,
+              flockId: rec._flockId ? Number(rec._flockId) : null,
+              eggInventoryId,
+              inventoryId: rec._inventoryId ? Number(rec._inventoryId) : null,
+              qty,
+              price,
+              gstPerc,
+              lineGst,
+              lineSub
+            });
+          }
+
+          const grandTotal = Math.max(0, subTotal + totalGst + otherCharges - discount);
+          const explicitStatus = (first.Status || '').trim().toLowerCase();
+          // Sum line ReceivedAmount if present per line, else use header ReceivedAmount
+          let receivedAmt = batch.lines.reduce((acc, l) => acc + cleanFloat(l.ReceivedAmount || 0), 0);
+          if (receivedAmt === 0 && (explicitStatus === 'paid' || (!explicitStatus && first.ReceivedAmount === undefined))) {
+            receivedAmt = explicitStatus === 'unpaid' ? 0 : grandTotal;
+          }
+          const balanceAmt = Math.max(0, grandTotal - receivedAmt);
+          const status: 'Paid' | 'Partial' | 'Unpaid' =
+            balanceAmt <= 0.01 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
+          const notes = (first.Notes || '').trim();
+
+          // 1. Insert parent Sales record in Supabase
+          const { data: insertedSale, error: sErr } = await supabaseServer
+            .from('Sales')
+            .insert([{
+              FarmId: targetFarmId,
+              CustomerId: custEntry.id,
+              SaleDate: saleDate,
+              SubTotal: subTotal,
+              Discount: discount,
+              TotalGSTAmount: totalGst,
+              OtherCharges: otherCharges,
+              GrandTotal: grandTotal,
+              ReceivedAmount: receivedAmt,
+              InvoiceNumber: batch.invoiceNo,
+              Status: status,
+              Notes: notes
+            }])
+            .select('Id')
+            .single();
+
+          if (sErr || !insertedSale) {
+            throw new Error(sErr?.message || 'Failed saving Sale record to database.');
+          }
+          const saleId = Number(insertedSale.Id);
+
+          // 2. Insert child SaleItems & deduct stock
+          for (const item of preparedItems) {
+            await supabaseServer.from('SaleItems').insert([{
+              SaleId: saleId,
+              ItemType: item.itemType,
+              FlockId: item.flockId,
+              EggInventoryId: item.eggInventoryId,
+              InventoryId: item.inventoryId,
+              Quantity: item.qty,
+              UnitPrice: item.price,
+              GSTPercentage: item.gstPerc,
+              GSTAmount: item.lineGst,
+              TotalPrice: item.lineSub + item.lineGst
+            }]);
+
+            if (item.itemType === 'Egg' && item.eggInventoryId) {
+              const cachedEgg = eggInventoryMap.get(item.eggInventoryId);
+              if (cachedEgg) {
+                cachedEgg.qty = Math.max(0, cachedEgg.qty - item.qty);
+                await supabaseServer
+                  .from('EggInventories')
+                  .update({ Quantity: Math.round(cachedEgg.qty) })
+                  .eq('Id', item.eggInventoryId);
+              }
+            } else if (item.itemType === 'Bird' && item.flockId) {
+              const { data: flk } = await supabaseServer
+                .from('Flocks')
+                .select('CurrentCount, Status')
+                .eq('Id', item.flockId)
+                .maybeSingle();
+              if (flk) {
+                const newBirdCount = Math.max(0, (Number(flk.CurrentCount) || 0) - item.qty);
+                const flockStatus = newBirdCount === 0 ? 'Sold' : flk.Status;
+                await supabaseServer
+                  .from('Flocks')
+                  .update({ CurrentCount: Math.round(newBirdCount), Status: flockStatus })
+                  .eq('Id', item.flockId);
+              }
+            } else if (item.inventoryId) {
+              const { data: invRow } = await supabaseServer
+                .from('Inventories')
+                .select('CurrentStock')
+                .eq('Id', item.inventoryId)
+                .maybeSingle();
+              if (invRow) {
+                const newStock = Math.max(0, (Number(invRow.CurrentStock) || 0) - item.qty);
+                await supabaseServer
+                  .from('Inventories')
+                  .update({ CurrentStock: newStock })
+                  .eq('Id', item.inventoryId);
+              }
             }
           }
 
-          const saleDate = rec.SaleDate;
-          const itemType = rec.ItemType || 'General Inventory';
-          const qty = parseFloat(rec.Quantity || '0');
-          const price = parseFloat(rec.UnitPrice || '0');
-          const gstPerc = parseFloat(rec.GSTPercentage || '0');
-          const discount = parseFloat(rec.Discount || '0');
-          const otherCharges = parseFloat(rec.OtherCharges || '0');
-
-          const subTotal = qty * price;
-          const gstAmount = subTotal * (gstPerc / 100);
-          const grandTotal = subTotal + gstAmount + otherCharges - discount;
-
-          const receivedAmt = parseFloat(rec.ReceivedAmount || '0');
-          const balanceAmt = grandTotal - receivedAmt;
-          const status = balanceAmt <= 0 ? 'Paid' : (receivedAmt > 0 ? 'Partial' : 'Unpaid');
-          const notes = rec.Notes || '';
-
-          // 1. Save Parent Sales record
-          const sResult = await query.run(`
-            INSERT INTO Sales (FarmId, CustomerId, SaleDate, SubTotal, Discount, TotalGSTAmount, OtherCharges, GrandTotal, ReceivedAmount, InvoiceNumber, Status, Notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [targetFarmId, customerId, saleDate, subTotal, discount, gstAmount, otherCharges, grandTotal, receivedAmt, invoiceNo, status, notes]);
-
-          const saleId = sResult.lastID;
-          syncRecordToSupabase('Sales', {
-            Id: saleId,
-            FarmId: targetFarmId,
-            CustomerId: customerId,
-            SaleDate: saleDate,
-            SubTotal: subTotal,
-            Discount: discount,
-            TotalGSTAmount: gstAmount,
-            OtherCharges: otherCharges,
-            GrandTotal: grandTotal,
-            ReceivedAmount: receivedAmt,
-            InvoiceNumber: invoiceNo,
-            Status: status,
-            Notes: notes
-          });
-
-          // 2. Map items & Deduct Stock Cascades
-          const flockId = rec._flockId || null;
-          const eggInventoryId = rec._eggInventoryId || null;
-          const inventoryId = rec._inventoryId || null;
-
-          const siResult = await query.run(`
-            INSERT INTO SaleItems (SaleId, ItemType, FlockId, EggInventoryId, InventoryId, Quantity, UnitPrice, GSTPercentage, GSTAmount, TotalPrice)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [saleId, itemType, flockId, eggInventoryId, inventoryId, qty, price, gstPerc, gstAmount, subTotal]);
-
-          syncRecordToSupabase('SaleItems', {
-            Id: siResult.lastID,
-            SaleId: saleId,
-            ItemType: itemType,
-            FlockId: flockId,
-            EggInventoryId: eggInventoryId,
-            InventoryId: inventoryId,
-            Quantity: qty,
-            UnitPrice: price,
-            GSTPercentage: gstPerc,
-            GSTAmount: gstAmount,
-            TotalPrice: subTotal
-          });
-
-          // Cascading stock deductions
-          if (itemType === 'Egg' && eggInventoryId) {
-            await query.run('UPDATE EggInventories SET Quantity = MAX(0, Quantity - ?) WHERE Id = ?', [qty, eggInventoryId]);
-            const eggRow = await query.get<{ Quantity: number }>('SELECT Quantity FROM EggInventories WHERE Id = ?', [eggInventoryId]);
-            if (eggRow) {
-              syncRecordToSupabase('EggInventories', {
-                Id: eggInventoryId,
-                FarmId: targetFarmId,
-                Quantity: eggRow.Quantity
-              });
-            }
-          } else if (itemType === 'Bird' && flockId) {
-            const flock = await query.get<{ CurrentCount: number, Status: string }>('SELECT CurrentCount, Status FROM Flocks WHERE Id = ?', [flockId]);
-            if (flock) {
-              const newBirdCount = Math.max(0, flock.CurrentCount - qty);
-              const flockStatus = newBirdCount === 0 ? 'Sold' : flock.Status;
-              await query.run('UPDATE Flocks SET CurrentCount = ?, Status = ? WHERE Id = ?', [newBirdCount, flockStatus, flockId]);
-              syncRecordToSupabase('Flocks', {
-                Id: flockId,
-                FarmId: targetFarmId,
-                CurrentCount: newBirdCount,
-                Status: flockStatus
-              });
-            }
-          } else if (inventoryId) {
-            await query.run('UPDATE Inventories SET CurrentStock = MAX(0, CurrentStock - ?) WHERE Id = ?', [qty, inventoryId]);
-            const invRow = await query.get<{ CurrentStock: number }>('SELECT CurrentStock FROM Inventories WHERE Id = ?', [inventoryId]);
-            if (invRow) {
-              syncRecordToSupabase('Inventories', {
-                Id: inventoryId,
-                FarmId: targetFarmId,
-                CurrentStock: invRow.CurrentStock
-              });
-            }
+          // 3. Update customer credit balance if unpaid balance remains
+          if (balanceAmt > 0.01) {
+            custEntry.credit += balanceAmt;
+            await supabaseServer
+              .from('Customers')
+              .update({ CurrentCreditBalance: custEntry.credit })
+              .eq('Id', custEntry.id);
           }
 
-          // Balance account credit adjustment
-          if (balanceAmt > 0) {
-            await query.run('UPDATE Customers SET CurrentCreditBalance = CurrentCreditBalance + ? WHERE Id = ?', [balanceAmt, customerId]);
-            const custRow = await query.get<{ CurrentCreditBalance: number }>('SELECT CurrentCreditBalance FROM Customers WHERE Id = ?', [customerId]);
-            if (custRow) {
-              syncRecordToSupabase('Customers', {
-                Id: customerId,
-                FarmId: targetFarmId,
-                CurrentCreditBalance: custRow.CurrentCreditBalance
-              });
-            }
+          // 4. Financial Transaction ledger parity
+          const catName = preparedItems.some(i => i.itemType === 'Bird') ? 'Bird Sales' : 'Egg Sales';
+          const financialCatId = await ensureCategoryId(catName);
+          if (financialCatId && (receivedAmt > 0 || grandTotal > 0)) {
+            await supabaseServer.from('FinancialTransactions').insert([{
+              FarmId: targetFarmId,
+              CategoryId: financialCatId,
+              Date: saleDate,
+              Amount: receivedAmt || grandTotal,
+              Notes: `Bulk Upload Sale - Invoice: ${batch.invoiceNo || saleId}`,
+              Type: 'Income',
+              CustomerId: custEntry.id,
+              Reference: batch.invoiceNo || String(saleId)
+            }]);
           }
 
-          // Auto trigger simple transaction ledger entry for ledger parity
-          const ftRes = await query.run(`
-            INSERT INTO FinancialTransactions (FarmId, CategoryId, Date, Amount, Notes, Type, StaffId, SupplierId, CustomerId, Reference)
-            VALUES (?, ?, ?, ?, ?, 'Income', NULL, NULL, ?, ?)
-          `, [targetFarmId, financialCatId, saleDate, receivedAmt || grandTotal, `Bulk Upload Sale - Invoice: ${invoiceNo}`, customerId, invoiceNo]);
-
-          syncRecordToSupabase('FinancialTransactions', {
-            Id: ftRes.lastID,
-            FarmId: targetFarmId,
-            CategoryId: financialCatId,
-            Date: saleDate,
-            Amount: receivedAmt || grandTotal,
-            Notes: `Bulk Upload Sale - Invoice: ${invoiceNo}`,
-            Type: 'Income',
-            CustomerId: customerId,
-            Reference: invoiceNo
-          });
-
-          saveCount++;
+          saveCount += batch.lines.length;
         }
+
+        // Reconcile egg inventories and flock counts after sales commit
+        try {
+          await cleanDuplicateEggInventories(targetFarmId);
+          await reconcileEggInventoryForFarm(targetFarmId);
+          await reconcileAllFlocksInventory();
+        } catch {}
       }
 
       // 4. Log the entry into audit trail
@@ -1493,59 +1974,189 @@ export const bulkImportControllers = {
     try {
       const cleanBase64 = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
       const buffer = Buffer.from(cleanBase64, 'base64');
-      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false, cellNF: true, cellText: true });
 
-      let workbookSummary = '';
-      const sheetsData: Record<string, any[]> = {};
+      const targetType = (type || 'sales') as 'sales' | 'purchases' | 'items' | 'daily-logs';
 
-      workbook.SheetNames.forEach(sheetName => {
+      const SCHEMA_HEADERS: Record<string, string[]> = {
+        sales: ['InvoiceNumber', 'CustomerName', 'SaleDate', 'ItemName', 'ItemType', 'Quantity', 'UnitPrice', 'GSTPercentage', 'Discount', 'OtherCharges', 'ReceivedAmount', 'Status', 'Notes'],
+        purchases: ['InvoiceNumber', 'SupplierName', 'PurchaseDate', 'ItemName', 'ItemType', 'Quantity', 'UnitPrice', 'GSTPercentage', 'ReceivedAmount', 'Status', 'Notes'],
+        items: ['ItemName', 'Category', 'UnitOfMeasurement', 'UnitPrice', 'SellingPrice', 'CurrentStock', 'WeightPerUnit', 'MinThreshold', 'Notes'],
+        'daily-logs': ['FlockName', 'LogDate', 'FeedName', 'FeedConsumedKg', 'MortalityCount', 'EggsCollected', 'DamagedEggsCollected', 'WaterConsumed', 'DailyAverageWeight', 'BirdsEatenBySelf', 'BirdsEatenValue', 'EggsGifted', 'EggsGiftedValue', 'Notes']
+      };
+
+      const targetHeaders = SCHEMA_HEADERS[targetType] || SCHEMA_HEADERS.sales;
+
+      // Extract clean non-empty rows per sheet with formatted string values (raw: false avoids opaque Excel serials)
+      const sheetsContent: Array<{ name: string; rows: any[][] }> = [];
+      let totalSerializedChars = 0;
+
+      for (const sheetName of workbook.SheetNames) {
         const sheet = workbook.Sheets[sheetName];
-        const jsonRows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-        sheetsData[sheetName] = jsonRows;
-        workbookSummary += `Sheet Name: "${sheetName}"\nRows Preview (first 25 rows):\n${JSON.stringify(jsonRows.slice(0, 25), null, 2)}\n\n`;
-      });
+        if (!sheet) continue;
+        const rawRows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, raw: false, defval: '' });
+        const cleanedRows = rawRows
+          .map(row => {
+            const arr = Array.isArray(row) ? row.map(c => (c === undefined || c === null ? '' : String(c).trim())) : [];
+            while (arr.length > 0 && arr[arr.length - 1] === '') arr.pop();
+            return arr;
+          })
+          .filter(row => row.some(cell => cell !== ''));
 
-      const targetType = type || 'sales';
-      const prompt = `You are an expert agricultural data intelligence assistant for Poultry LMS 360.
-Analyze this Excel workbook containing multi-tab sheets: ${workbook.SheetNames.join(', ')}.
-Target import type: "${targetType}" (options: sales, purchases, items, daily-logs).
-
-Here is the workbook content structure:
-${workbookSummary}
-
-CRITICAL TASK:
-1. Examine all worksheets, including multi-tab relationships (e.g., separate header and item tables, or single sheets).
-2. Map and transform the data into a clean, flat table formatted as CSV string (with headers matching the target schema).
-3. For "sales", include headers: InvoiceNumber,CustomerName,SaleDate,ItemName,ItemType,Quantity,UnitPrice,GSTPercentage,Discount,OtherCharges,ReceivedAmount,Status,Notes
-4. For "purchases", include headers: InvoiceNumber,SupplierName,PurchaseDate,ItemName,ItemType,Quantity,UnitPrice,GSTPercentage,ReceivedAmount,Status,Notes
-5. For "items", include headers: ItemName,Category,UnitOfMeasurement,UnitPrice,SellingPrice,CurrentStock,WeightPerUnit,MinThreshold,Notes
-6. For "daily-logs", include headers: FlockName,LogDate,FeedName,FeedConsumedKg,MortalityCount,EggsCollected,DamagedEggsCollected,WaterConsumed,DailyAverageWeight,BirdsEatenBySelf,BirdsEatenValue,EggsGifted,EggsGiftedValue,Notes
-
-Return a JSON object strictly formatted as:
-{
-  "headers": ["Field1", "Field2", ...],
-  "csvContent": "Field1,Field2\\nVal1,Val2\\n...",
-  "summary": "Description of sheets processed and mapping applied."
-}`;
-
-      const response = await clientInfo.client.models.generateContent({
-        model: 'gemini-3.1-flash-lite',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json'
+        if (cleanedRows.length > 0) {
+          sheetsContent.push({ name: sheetName, rows: cleanedRows });
+          totalSerializedChars += JSON.stringify(cleanedRows).length;
         }
+      }
+
+      if (sheetsContent.length === 0) {
+        return res.status(400).json({ error: 'The uploaded workbook contains no readable rows.' });
+      }
+
+      // Build field schema dynamically for structured Gemini JSON output
+      const recordProperties: Record<string, any> = {};
+      for (const h of targetHeaders) {
+        recordProperties[h] = { type: Type.STRING };
+      }
+
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          summary: { type: Type.STRING, description: 'Short explanation of worksheets processed and column mappings.' },
+          records: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: recordProperties
+            }
+          }
+        },
+        required: ['summary', 'records']
+      };
+
+      const CANDIDATE_MODELS = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+
+      const buildPromptForSheets = (sheetsPayload: Array<{ name: string; rows: any[][] }>) => {
+        const formattedSheets = sheetsPayload
+          .map(s => `--- Sheet "${s.name}" (${s.rows.length} rows) ---\n${JSON.stringify(s.rows)}`)
+          .join('\n\n');
+
+        return `You are a precision data transformation engine for Poultry LMS 360.
+Transform the uploaded spreadsheet workbook (sheets: ${workbook.SheetNames.join(', ')}) into structured JSON records strictly matching the "${targetType}" database schema.
+
+Target JSON record fields (ALL values returned cleanly):
+${targetHeaders.join(', ')}
+
+Workbook Data:
+${formattedSheets}
+
+STRICT TRANSFORMATION RULES:
+1. Examine EVERY worksheet and detect multi-tab relationships (e.g. separate Sales Header and Sale Items sheets linked by invoice/bill number, or single-sheet accounting reports).
+2. Ignore report title headers, blank rows, column subheaders, and summary/subtotal/"Total"/"Grand Total" footer rows.
+3. Hierarchical/grouped invoices: if an accounting report prints Date, Invoice No, or Customer Name only on the first row of a group and leaves subsequent item rows blank for those columns, carry them down to every item row belonging to that invoice.
+4. DATES: Convert EVERY date ("SaleDate", "PurchaseDate", or "LogDate") into strict "YYYY-MM-DD" format. Assume DD-MM-YYYY / DD/MM/YYYY ordering when ambiguous (e.g. "01-04-2026" -> "2026-04-01", "15/11/2026" -> "2026-11-15").
+5. FOR "sales":
+   - If the item is eggs (e.g. "Eggs", "Fresh Eggs", "Table Eggs", "White Eggs", "Brown Eggs", "Damaged Eggs", "Anda", etc.), set "ItemType" strictly to "Egg" and keep the item label in "ItemName".
+   - If the item is live birds (broilers, layers, hens, culls, flock), set "ItemType" strictly to "Bird".
+   - Otherwise set "ItemType" to "General Inventory".
+   - If "Status" is Paid/Cash or ReceivedAmount equals total, set "Status" to "Paid" (options: "Paid", "Partial", "Unpaid"). Fill numeric strings without currency symbols or commas (e.g. "1250.50", "0").
+6. FOR "purchases":
+   - Set "ItemType" to "Flock" for live birds/chicks/flocks, or "Inventory" otherwise. Format numbers cleanly without currency symbols.
+7. Transform ALL valid data rows from the sheets — do NOT truncate or skip rows.`;
+      };
+
+      const callGeminiWithFailover = async (promptText: string) => {
+        let lastErr: any = null;
+        for (let i = 0; i < CANDIDATE_MODELS.length; i++) {
+          const model = CANDIDATE_MODELS[i];
+          try {
+            const genPromise = clientInfo.client.models.generateContent({
+              model,
+              contents: promptText,
+              config: {
+                responseMimeType: 'application/json',
+                responseSchema
+              }
+            });
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`Timeout: Model ${model} exceeded 45 seconds`)), 45000)
+            );
+            const response: any = await Promise.race([genPromise, timeoutPromise]);
+            const parsed = JSON.parse(response.text?.trim() || '{}');
+            if (parsed && Array.isArray(parsed.records)) {
+              return parsed;
+            }
+          } catch (err: any) {
+            lastErr = err;
+            const status = err.status || err.code || (err.error && err.error.code);
+            const msg = (err.message || '').toLowerCase();
+            if (status === 429 || msg.includes('quota') || msg.includes('resource_exhausted')) {
+              keyPool.markKeyCooldown(clientInfo.keyId, 15 * 60 * 1000);
+            }
+          }
+        }
+        throw lastErr || new Error('AI failed to generate structured JSON records.');
+      };
+
+      let allJsonRecords: Record<string, any>[] = [];
+      let combinedSummary = '';
+
+      if (totalSerializedChars <= 90000) {
+        const resultJson = await callGeminiWithFailover(buildPromptForSheets(sheetsContent));
+        allJsonRecords = resultJson.records || [];
+        combinedSummary = resultJson.summary || `Processed ${sheetsContent.length} worksheet(s).`;
+      } else {
+        // Chunk large primary sheet(s) in batches of 120 rows while including smaller secondary sheets as reference
+        const largestSheet = [...sheetsContent].sort((a, b) => b.rows.length - a.rows.length)[0];
+        const headerHint = largestSheet.rows.slice(0, 5);
+        const bodyRows = largestSheet.rows.slice(5);
+        const auxSheets = sheetsContent.filter(s => s !== largestSheet && JSON.stringify(s.rows).length < 25000);
+        const CHUNK_ROWS = 120;
+        for (let start = 0; start < bodyRows.length; start += CHUNK_ROWS) {
+          const chunkSheet = {
+            name: largestSheet.name,
+            rows: [...headerHint, ...bodyRows.slice(start, start + CHUNK_ROWS)]
+          };
+          const resultJson = await callGeminiWithFailover(buildPromptForSheets([chunkSheet, ...auxSheets]));
+          if (Array.isArray(resultJson.records)) {
+            allJsonRecords.push(...resultJson.records);
+          }
+          if (!combinedSummary && resultJson.summary) combinedSummary = resultJson.summary;
+        }
+      }
+
+      if (allJsonRecords.length === 0) {
+        throw new Error('No importable data rows were found in the uploaded spreadsheet.');
+      }
+
+      // Deterministic server-side post-normalization on every transformed JSON record
+      const cleanedJsonRecords = allJsonRecords.map((rawRec) => {
+        const rec: Record<string, any> = {};
+        for (const h of targetHeaders) {
+          rec[h] = rawRec?.[h] !== undefined && rawRec?.[h] !== null ? String(rawRec[h]).trim() : '';
+        }
+        if (targetType === 'sales') {
+          rec.SaleDate = cleanDate(rec.SaleDate);
+          if (isEggItemName(rec.ItemName, rec.ItemType)) {
+            rec.ItemType = 'Egg';
+          }
+        } else if (targetType === 'purchases') {
+          rec.PurchaseDate = cleanDate(rec.PurchaseDate);
+        } else if (targetType === 'daily-logs') {
+          rec.LogDate = cleanDate(rec.LogDate);
+        }
+        return rec;
       });
 
-      const resultJson = JSON.parse(response.text?.trim() || '{}');
-      if (!resultJson.csvContent) {
-        throw new Error('AI could not generate structured CSV rows from this spreadsheet.');
-      }
+      const csvContent = recordsToCsv(targetHeaders, cleanedJsonRecords);
 
       return res.json({
         success: true,
-        csvContent: resultJson.csvContent,
-        headers: resultJson.headers || [],
-        summary: resultJson.summary || 'AI successfully processed and mapped workbook tabs.',
+        type: targetType,
+        jsonRecords: cleanedJsonRecords,
+        csvContent,
+        headers: targetHeaders,
+        summary: combinedSummary || `Transformed ${cleanedJsonRecords.length} rows across ${workbook.SheetNames.length} tab(s).`,
         sheetsProcessed: workbook.SheetNames
       });
 

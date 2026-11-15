@@ -6,7 +6,7 @@ import {
   CheckCircle2, 
   XCircle, 
   FileSpreadsheet, 
-  Play, 
+  FileJson,
   Check, 
   Activity, 
   HelpCircle,
@@ -19,15 +19,16 @@ import { useFarm } from '../context/FarmContext';
 const bulkImportTranslations: Record<Language, any> = {
   en: {
     title: 'Bulk Ledger Data Import Node',
-    sub: 'Accelerate system populating times with high-throughput CSV spreadsheet templates. Includes active duplicate checking and dependency parsing.',
+    sub: 'Accelerate system populating times with high-throughput CSV or Excel spreadsheets. Includes automatic schema transformation, duplicate checking, and dependency parsing.',
     step1: '1. Download Sample Spreadsheet Template',
-    step2: '2. Upload Completed CSV Spreadsheet',
+    step2: '2. Upload Completed CSV or Excel Spreadsheet',
     schemaFields: 'Required Schema Fields',
     downloadBtn: 'Download CSV Template',
-    uploadBtn: 'Upload CSV File',
-    selectDropFile: 'Select or Drop CSV File',
-    dropEncoding: 'Supports plain UTF-8 encoded files up to 50MB. Click to browse.',
+    uploadBtn: 'Upload File',
+    selectDropFile: 'Select or Drop CSV / Excel File',
+    dropEncoding: 'Supports .csv, .xlsx, and .xls files up to 50MB. Excel workbooks auto-convert to schema JSON.',
     parsingText: 'Working... reading rows & checking bounds',
+    aiConvertingText: 'Transforming Excel workbook & normalizing schema JSON...',
     commitBtn: 'Commit & Save Records to Database',
     validationResults: 'File Parsing & Verification',
     readyToSync: 'File contains valid schema. Click Commit to load into database.',
@@ -54,12 +55,37 @@ interface ValidationSummary {
   valid: number;
   duplicate: number;
   invalid: number;
+  advisory?: string;
 }
 
 interface ParseResponse {
   type: ImportType;
   validationSummary: ValidationSummary;
   records: ParseRecord[];
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('Failed to read file contents.'));
+    };
+    reader.onerror = () => reject(reader.error || new Error('File reading failed.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('Failed to read text file.'));
+    };
+    reader.onerror = () => reject(reader.error || new Error('File reading failed.'));
+    reader.readAsText(file);
+  });
 }
 
 export default function BulkImport({ currentLanguage }: BulkImportProps) {
@@ -78,6 +104,8 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
   const [successMessage, setSuccessMessage] = useState<string>('');
   const [isAiConverting, setIsAiConverting] = useState<boolean>(false);
   const [aiSummary, setAiSummary] = useState<string>('');
+  const [aiJsonRecords, setAiJsonRecords] = useState<any[] | null>(null);
+  const [showJsonPreview, setShowJsonPreview] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const aiFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -86,41 +114,57 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
     setErrorMessage('');
     setSuccessMessage('');
     setAiSummary('');
+    setAiJsonRecords(null);
+    setShowJsonPreview(false);
+    setParseResult(null);
+    setFileName(file.name);
     try {
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        if (event.target?.result) {
-          const base64 = event.target.result as string;
-          const token = localStorage.getItem('token');
-          const res = await fetch('/api/bulk-import/ai-excel-parse', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': token ? `Bearer ${token}` : '',
-              'X-Farm-Id': String(farmId)
-            },
-            body: JSON.stringify({
-              type: selectedType,
-              fileBase64: base64,
-              farmId
-            })
-          });
+      const base64 = await readFileAsDataUrl(file);
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/bulk-import/ai-excel-parse', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : '',
+          'x-user-email': localStorage.getItem('userEmail') || 'operator@farm.com',
+          'X-Farm-Id': String(farmId)
+        },
+        body: JSON.stringify({
+          type: selectedType,
+          fileBase64: base64,
+          farmId
+        })
+      });
 
-          const data = await res.json();
-          if (!res.ok) {
-            throw new Error(data.error || 'Failed to process Excel workbook with Gemini AI.');
-          }
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to transform Excel workbook into schema JSON.');
+      }
 
-          setAiSummary(data.summary || 'AI successfully processed and mapped workbook tabs.');
-          processFileContent(data.csvContent, file.name);
-        }
-      };
-      reader.readAsDataURL(file);
+      setAiSummary(data.summary || `Successfully transformed ${data.jsonRecords?.length || 0} records into ${selectedType} JSON schema.`);
+      setAiJsonRecords(Array.isArray(data.jsonRecords) ? data.jsonRecords : null);
+      await processFileContent(data.csvContent, file.name, true);
     } catch (err: any) {
-      setErrorMessage(err.message || 'AI Excel conversion failed.');
+      setErrorMessage(err.message || 'Excel-to-JSON conversion failed.');
     } finally {
       setIsAiConverting(false);
+      if (aiFileInputRef.current) aiFileInputRef.current.value = '';
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleDownloadJson = () => {
+    if (!aiJsonRecords) return;
+    const blob = new Blob([JSON.stringify(aiJsonRecords, null, 2)], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const baseName = (fileName || selectedType).replace(/\.[^/.]+$/, '');
+    link.setAttribute('download', `${baseName}_${selectedType}_transformed.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // Sample templates as stringified CSV structures
@@ -174,13 +218,39 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
     }
   };
 
-  const processFileContent = (content: string, name: string) => {
+  const processFileContent = async (content: string, name: string, preserveAiState = false) => {
     setCsvText(content);
     setFileName(name);
     setSuccessMessage('');
     setErrorMessage('');
     setParseResult(null);
-    handleParse(content);
+    if (!preserveAiState) {
+      setAiJsonRecords(null);
+      setAiSummary('');
+      setShowJsonPreview(false);
+    }
+    await handleParse(content);
+  };
+
+  const handleUploadedFile = async (file: File) => {
+    const lowerName = file.name.toLowerCase();
+    // Any Excel binary/XML/HTML workbook goes straight through the multi-tab Excel-to-JSON converter
+    if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
+      await handleAiExcelUpload(file);
+      return;
+    }
+
+    try {
+      const text = await readFileAsText(file);
+      const trimmedStart = text.trimStart().slice(0, 200).toLowerCase();
+      if (trimmedStart.startsWith('<html') || trimmedStart.startsWith('<!doctype') || trimmedStart.startsWith('<?xml') || trimmedStart.startsWith('<table')) {
+        await handleAiExcelUpload(file);
+        return;
+      }
+      await processFileContent(text, file.name);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to read uploaded file.');
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -189,27 +259,13 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
     setDragActive(false);
     
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          processFileContent(event.target.result as string, file.name);
-        }
-      };
-      reader.readAsText(file);
+      handleUploadedFile(e.dataTransfer.files[0]);
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          processFileContent(event.target.result as string, file.name);
-        }
-      };
-      reader.readAsText(file);
+      handleUploadedFile(e.target.files[0]);
     }
   };
 
@@ -278,7 +334,11 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
       setParseResult(null);
       setFileName('');
       setCsvText('');
+      setAiJsonRecords(null);
+      setAiSummary('');
+      setShowJsonPreview(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      if (aiFileInputRef.current) aiFileInputRef.current.value = '';
 
       // Signal components across the app to refresh their data
       window.dispatchEvent(new CustomEvent('farm-data-updated'));
@@ -315,6 +375,9 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
                 setCsvText('');
                 setErrorMessage('');
                 setSuccessMessage('');
+                setAiJsonRecords(null);
+                setAiSummary('');
+                setShowJsonPreview(false);
               }}
               className={`px-3 py-1.5 rounded-lg text-[11px] font-bold tracking-wide uppercase transition-all duration-150 ${
                 selectedType === type
@@ -384,7 +447,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv"
+                accept=".csv,.xlsx,.xls"
                 className="hidden"
                 onChange={handleFileChange}
               />
@@ -407,6 +470,9 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
                     setFileName('');
                     setCsvText('');
                     setParseResult(null);
+                    setAiJsonRecords(null);
+                    setAiSummary('');
+                    setShowJsonPreview(false);
                     if (fileInputRef.current) fileInputRef.current.value = '';
                   }}
                   className="text-red-500 hover:text-red-700 font-bold"
@@ -417,15 +483,15 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
             )}
           </div>
 
-          {/* AI Universal Excel & Multi-Tab Converter Card */}
+          {/* Universal Excel & Multi-Tab Excel-to-JSON Converter Card */}
           <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-teal-950 border border-indigo-500/30 rounded-2xl p-5 shadow-lg text-white space-y-4">
             <div className="flex items-center gap-2.5">
               <div className="p-2 bg-indigo-500/20 text-indigo-300 rounded-xl">
-                <Activity className="h-5 w-5 animate-pulse" />
+                <Activity className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-200">AI Universal Excel / Multi-Tab Converter</h3>
-                <p className="text-[11px] text-slate-300">Upload any Excel sheet or multi-tab workbook (.xlsx, .xls) in any format. Gemini AI will automatically parse and map tabs.</p>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-200">Universal Excel / Multi-Tab JSON Converter</h3>
+                <p className="text-[11px] text-slate-300">Upload any Excel sheet or multi-tab workbook (.xlsx, .xls) in any format. Transforms tabs & dates into structured schema JSON.</p>
               </div>
             </div>
 
@@ -449,7 +515,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
               {isAiConverting ? (
                 <>
                   <Database className="h-4 w-4 animate-spin text-slate-950" />
-                  <span>Gemini AI Analyzing Multi-Tab Workbook...</span>
+                  <span>Transforming Workbook to Schema JSON...</span>
                 </>
               ) : (
                 <>
@@ -460,8 +526,28 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
             </button>
 
             {aiSummary && (
-              <div className="p-3 bg-indigo-950/60 border border-indigo-500/30 rounded-xl text-[11px] text-indigo-200 font-mono">
-                <strong>AI Summary:</strong> {aiSummary}
+              <div className="p-3 bg-indigo-950/60 border border-indigo-500/30 rounded-xl text-[11px] text-indigo-200 font-mono space-y-2">
+                <div><strong>Conversion Summary:</strong> {aiSummary}</div>
+                {aiJsonRecords && aiJsonRecords.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowJsonPreview(v => !v)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-500/30 hover:bg-indigo-500/50 text-white text-[10px] font-bold transition-colors"
+                    >
+                      <FileJson className="h-3.5 w-3.5" />
+                      {showJsonPreview ? 'Hide JSON Output' : `Preview JSON (${aiJsonRecords.length})`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadJson}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-teal-500/30 hover:bg-teal-500/50 text-teal-100 text-[10px] font-bold transition-colors"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download JSON
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -495,7 +581,7 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
           )}
 
           {/* Core Parsing Result Preview Layout */}
-          {isParsing && (
+          {(isParsing || isAiConverting) && (
             <div className="bg-white border border-slate-200 rounded-2xl p-12 shadow-sm text-center flex flex-col items-center justify-center space-y-4">
               <div className="relative flex items-center justify-center mb-2">
                 <div className="animate-ping absolute inline-flex h-12 w-12 rounded-full bg-indigo-400 opacity-20"></div>
@@ -503,17 +589,50 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
                   <Database className="h-6 w-6 animate-spin" />
                 </div>
               </div>
-              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest">{bt.parsingText}</h3>
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest">
+                {isAiConverting ? bt.aiConvertingText : bt.parsingText}
+              </h3>
             </div>
           )}
 
-          {!isParsing && !parseResult && !successMessage && !errorMessage && (
+          {!isParsing && !isAiConverting && !parseResult && !successMessage && !errorMessage && (
             <div className="bg-white border border-slate-200 rounded-2xl p-12 shadow-sm text-center flex flex-col items-center justify-center text-slate-400 space-y-3">
               <FileSpreadsheet className="h-10 w-10 text-slate-300 mb-2" />
               <h3 className="text-xs font-bold text-slate-600 uppercase tracking-widest">{bt.validationResults}</h3>
               <p className="text-xs max-w-sm leading-relaxed">
-                Choose a ledger type above, download the template structure, fill in your records, and upload it to run deduplication and integrity check.
+                Choose a ledger type above, download the CSV template or upload any Excel workbook (.xlsx, .xls) to transform into structured JSON and validate records before committing.
               </p>
+            </div>
+          )}
+
+          {showJsonPreview && aiJsonRecords && (
+            <div className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+              <div className="px-4 py-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-teal-300 font-mono">
+                  <FileJson className="h-4 w-4" />
+                  Transformed Schema JSON ({aiJsonRecords.length} records)
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDownloadJson}
+                    className="px-2.5 py-1 bg-teal-600 hover:bg-teal-500 text-white rounded-lg text-[10px] font-bold flex items-center gap-1"
+                  >
+                    <Download className="h-3 w-3" />
+                    Export JSON
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowJsonPreview(false)}
+                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px] font-bold"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              <pre className="p-4 text-[11px] font-mono text-slate-200 max-h-72 overflow-auto leading-relaxed">
+                {JSON.stringify(aiJsonRecords, null, 2)}
+              </pre>
             </div>
           )}
 
@@ -544,6 +663,13 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
               </div>
 
               {/* Warnings and issues checklist first */}
+              {parseResult.validationSummary.advisory && (
+                <div className="bg-indigo-50 border-y border-indigo-200 p-4 flex gap-2.5 text-xs text-indigo-900">
+                  <HelpCircle className="h-5 w-5 text-indigo-600 shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">{parseResult.validationSummary.advisory}</p>
+                </div>
+              )}
+
               {parseResult.validationSummary.invalid > 0 && (
                 <div className="bg-amber-50 border-y border-amber-200 p-4 flex gap-2.5 text-xs text-amber-800">
                   <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
@@ -630,6 +756,9 @@ export default function BulkImport({ currentLanguage }: BulkImportProps) {
                       setParseResult(null);
                       setFileName('');
                       setCsvText('');
+                      setAiJsonRecords(null);
+                      setAiSummary('');
+                      setShowJsonPreview(false);
                     }}
                     className="px-3 py-1.5 border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 text-xs font-bold rounded-lg"
                   >
