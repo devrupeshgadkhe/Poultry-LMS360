@@ -16,12 +16,13 @@ import {
   Info,
   CheckCircle2,
   Wheat
-, RotateCcw } from 'lucide-react';
+} from 'lucide-react';
 import { FoodRecipe, Inventory } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { recipeService, inventoryService } from '../lib/dataService';
 import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
+import EraseDataModal from './EraseDataModal';
 
 interface RecipeLineItem {
   IngredientId: string;
@@ -116,6 +117,7 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
   const [allInventories, setAllInventories] = useState<Inventory[]>([]);
   const [productionLogs, setProductionLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showEraseModal, setShowEraseModal] = useState(false);
 
   // Tab 1 (Quick Batch Production) state
   const [selectedRecipeId, setSelectedRecipeId] = useState<number | null>(null);
@@ -450,33 +452,13 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
 
         {canReset && (
           <button
-            onClick={async () => {
-              if (window.confirm("⚠️ Hard Reset Form (Milling Room): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
-                try {
-                  const res = await fetch('/api/developer/form-hard-reset', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ formKey: 'milling', farmId })
-                  });
-                  const data = await res.json();
-                  if (data.success) {
-                    alert(data.message || 'Milling Room reset successfully!');
-                    window.dispatchEvent(new Event('farm-data-updated'));
-                    if (typeof fetchData === 'function') fetchData();
-                    else window.location.reload();
-                  } else {
-                    alert(data.error || 'Failed to reset form');
-                  }
-                } catch (err: any) {
-                  alert(err.message || 'Error executing form reset');
-                }
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
-            title="Hard Reset this form (Clear records, reset amounts to 0)"
+            type="button"
+            onClick={() => setShowEraseModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition cursor-pointer"
+            title="Permanently erase all feed production logs and reset totals to zero"
           >
-            <RotateCcw className="h-4 w-4 shrink-0" />
-            <span className="hidden sm:inline">Form Reset</span>
+            <Trash2 className="h-4 w-4 shrink-0" />
+            <span className="hidden sm:inline">Erase All Data</span>
           </button>
         )}
 {/* Quick Nav Tabs */}
@@ -1243,6 +1225,16 @@ export default function MillingRoom({ currentLanguage = 'en' }: { currentLanguag
           )}
         </>
       )}
+
+      <EraseDataModal
+        isOpen={showEraseModal}
+        onClose={() => setShowEraseModal(false)}
+        formKey="milling"
+        farmId={farmId}
+        moduleName="Feed Milling & Mix"
+        recordsDescription="feed production batch logs"
+        onSuccess={fetchData}
+      />
     </div>
   );
 }

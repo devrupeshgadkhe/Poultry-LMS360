@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Trash2, ShieldCheck, HeartPulse, User, Edit2, ShieldAlert, Clock , RotateCcw } from 'lucide-react';
+import { Plus, Trash2, ShieldCheck, HeartPulse, User, Edit2, ShieldAlert, Clock } from 'lucide-react';
 import { Vaccination, Flock } from '../types';
 import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { vaccinationService, flockService } from '../lib/dataService';
 import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
+import EraseDataModal from './EraseDataModal';
 
 const formatDateDDMMYYYY = (dateStr: string | null | undefined): string => {
   if (!dateStr) return '';
@@ -57,6 +58,7 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showEraseModal, setShowEraseModal] = useState(false);
 
   useEffect(() => {
     fetchVaccines();
@@ -268,33 +270,13 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
         <div className="flex items-center gap-2">
           {canReset && (
             <button
-              onClick={async () => {
-                if (window.confirm("⚠️ Hard Reset Form (Vaccinations): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
-                  try {
-                    const res = await fetch('/api/developer/form-hard-reset', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ formKey: 'vaccinations', farmId })
-                    });
-                    const data = await res.json();
-                    if (data.success) {
-                      alert(data.message || 'Vaccinations reset successfully!');
-                      window.dispatchEvent(new Event('farm-data-updated'));
-                      fetchVaccines();
-                      fetchFlocks();
-                    } else {
-                      alert(data.error || 'Failed to reset form');
-                    }
-                  } catch (err: any) {
-                    alert(err.message || 'Error executing form reset');
-                  }
-                }
-              }}
-              className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
-              title="Hard Reset this form (Clear records, reset amounts to 0)"
+              type="button"
+              onClick={() => setShowEraseModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition cursor-pointer"
+              title="Permanently erase all vaccination records and reset totals to zero"
             >
-              <RotateCcw className="h-4 w-4 shrink-0" />
-              <span className="hidden sm:inline">Form Reset</span>
+              <Trash2 className="h-4 w-4 shrink-0" />
+              <span className="hidden sm:inline">Erase All Data</span>
             </button>
           )}
           {activeAlertCount > 0 && (
@@ -575,6 +557,19 @@ export default function Vaccinations({ currentLanguage = 'en' }: { currentLangua
           </div>
         </div>
       )}
+
+      <EraseDataModal
+        isOpen={showEraseModal}
+        onClose={() => setShowEraseModal(false)}
+        formKey="vaccinations"
+        farmId={farmId}
+        moduleName="Medicines & Vaccines"
+        recordsDescription="vaccination and medicine administration records"
+        onSuccess={async () => {
+          await fetchVaccines();
+          await fetchFlocks();
+        }}
+      />
     </div>
   );
 }

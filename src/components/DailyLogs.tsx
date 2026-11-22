@@ -5,6 +5,7 @@ import { translations, Language } from '../translations';
 import { useFarm } from '../context/FarmContext';
 import { dailyLogService, flockService, inventoryService } from '../lib/dataService';
 import { hasPermission, isSuperOrAdmin } from '../utils/permissions';
+import EraseDataModal from './EraseDataModal';
 
 export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?: Language }) {
   const t = translations[currentLanguage];
@@ -18,6 +19,7 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
   const [submitting, setSubmitting] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingLogId, setEditingLogId] = useState<number | null>(null);
+  const [showEraseModal, setShowEraseModal] = useState(false);
 
   // User role and granular permissions
   const canCreate = hasPermission('dailylogs.create');
@@ -404,33 +406,13 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
         </div>
         {canReset && (
           <button
-            onClick={async () => {
-              if (window.confirm("⚠️ Hard Reset Form (Daily Logs): Are you sure you want to delete all records for this module and reset amounts to zero? Other modules will remain untouched.")) {
-                try {
-                  const res = await fetch('/api/developer/form-hard-reset', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ formKey: 'dailylogs', farmId })
-                  });
-                  const data = await res.json();
-                  if (data.success) {
-                    alert(data.message || 'Daily Logs reset successfully!');
-                    window.dispatchEvent(new Event('farm-data-updated'));
-                    fetchLogs();
-                    fetchOptions();
-                  } else {
-                    alert(data.error || 'Failed to reset form');
-                  }
-                } catch (err: any) {
-                  alert(err.message || 'Error executing form reset');
-                }
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition"
-            title="Hard Reset this form (Clear records, reset amounts to 0)"
+            type="button"
+            onClick={() => setShowEraseModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md shrink-0 transition cursor-pointer"
+            title="Permanently erase all daily log records and reset totals to zero"
           >
-            <RotateCcw className="h-4 w-4 shrink-0" />
-            <span className="hidden sm:inline">Form Reset</span>
+            <Trash2 className="h-4 w-4 shrink-0" />
+            <span className="hidden sm:inline">Erase All Data</span>
           </button>
         )}
 {canCreate && (
@@ -1035,6 +1017,19 @@ export default function DailyLogs({ currentLanguage = 'en' }: { currentLanguage?
         </div>
       </div>
       )}
+
+      <EraseDataModal
+        isOpen={showEraseModal}
+        onClose={() => setShowEraseModal(false)}
+        formKey="dailylogs"
+        farmId={farmId}
+        moduleName="Daily Records"
+        recordsDescription="daily production, mortality, and feed consumption log entries"
+        onSuccess={async () => {
+          await fetchLogs();
+          await fetchOptions();
+        }}
+      />
     </div>
   );
 }
